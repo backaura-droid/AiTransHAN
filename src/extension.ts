@@ -4,9 +4,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { ThinkingPanel } from './panel/thinkingPanel';
-import { findActiveSessionFile } from './sessionLocator';
+import { findActiveSessionFile, decideNextWatch } from './sessionLocator';
 import { tailOnce } from './jsonlTailer';
-import { extractThinkingText, needsTranslation } from './thinkingFilter';
+import { pickTranslatable } from './thinkingFilter';
 import { TranslationQueue } from './translationQueue';
 import { writeAndRunAgy } from './agyTranslator';
 
@@ -18,6 +18,31 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', panel)
   );
 
+  let paused = false;
+  let currentOffset = 0;
+  let watchedFile: string | null = null;
+  let watcher: fs.FSWatcher | undefined;
+
+  // 리뷰 I3: togglePause는 워크스페이스가 없어도(아래 가드 이전에) 항상 등록해야
+  // "명령을 찾을 수 없음" 오류 없이 동작한다.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('claudeThinkingKo.togglePause', () => {
+      paused = !paused;
+      if (!paused && watchedFile) {
+        try {
+          // 리뷰 I3: 재개 시 일시정지 동안 쌓인 분을 한꺼번에 번역 큐에 넣지 않는다 —
+          // 파일의 현재 크기로 건너뛰어 "지금부터"만 본다(과거분 건너뜀 원칙을 재개에도 적용).
+          currentOffset = fs.statSync(watchedFile).size;
+        } catch {
+          // 파일이 사라졌으면 다음 재탐색이 새로 찾는다
+        }
+      }
+      vscode.window.showInformationMessage(
+        paused ? 'claude-thinking-ko: 일시정지됨' : 'claude-thinking-ko: 재개됨'
+      );
+    })
+  );
+
   const workspaceCwdMaybe = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceCwdMaybe) {
     return;
@@ -26,11 +51,6 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
   fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-
-  let paused = false;
-  let currentOffset = 0;
-  let watcher: fs.FSWatcher | undefined;
-  let rescanTimer: NodeJS.Timeout | undefined;
 
   const translate = (text: string) =>
     writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
@@ -47,50 +67,41 @@ export function activate(context: vscode.ExtensionContext): void {
     if (paused) return;
     const { records, nextOffset } = tailOnce(file, currentOffset);
     currentOffset = nextOffset;
-    for (const record of records) {
-      if (typeof record !== 'object' || record === null) continue;
-      const text = extractThinkingText(record as Record<string, unknown>);
-      if (text && needsTranslation(text)) {
-        queue.enqueue(text);
-      }
+    for (const text of pickTranslatable(records)) {
+      queue.enqueue(text);
     }
   }
 
-  function startWatching(file: string): void {
-    currentOffset = fs.statSync(file).size; // 활성화 시점부터만 — 과거분 건너뜀
+  function watch(file: string, startFromBeginning: boolean): void {
+    watcher?.close();
+    watchedFile = file;
+    currentOffset = startFromBeginning ? 0 : fs.statSync(file).size;
     watcher = fs.watch(file, () => handleFileChange(file));
+    watcher.on('error', () => {
+      // 리뷰 C3 연계: 감시 중이던 파일이 사라지거나 이름이 바뀌어도 확장이 죽지 않게 한다.
+      // 다음 재탐색(reconcileWatch)이 알아서 복구를 시도한다.
+      watcher = undefined;
+      watchedFile = null;
+    });
   }
 
-  function tryStart(): void {
-    if (watcher) return;
-    const file = findActiveSessionFile(projectsRoot, workspaceCwd);
-    if (file) {
-      if (rescanTimer) {
-        clearInterval(rescanTimer);
-        rescanTimer = undefined;
-      }
-      startWatching(file);
+  // 리뷰 C3: 세션 파일을 한 번 찾으면 영구히 고정돼 새 대화를 못 따라갔다.
+  // 감시 중에도 멈추지 않고 계속 재탐색해서, 더 최근 파일이 나타나면 거기로 옮겨간다.
+  function reconcileWatch(): void {
+    const found = findActiveSessionFile(projectsRoot, workspaceCwd);
+    const decision = decideNextWatch(found, watchedFile);
+    if (decision) {
+      watch(decision.file, decision.startFromBeginning);
     }
   }
 
-  tryStart();
-  if (!watcher) {
-    rescanTimer = setInterval(tryStart, RESCAN_INTERVAL_MS);
-  }
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand('claudeThinkingKo.togglePause', () => {
-      paused = !paused;
-      vscode.window.showInformationMessage(
-        paused ? 'claude-thinking-ko: 일시정지됨' : 'claude-thinking-ko: 재개됨'
-      );
-    })
-  );
+  reconcileWatch();
+  const rescanTimer = setInterval(reconcileWatch, RESCAN_INTERVAL_MS);
 
   context.subscriptions.push({
     dispose: () => {
       watcher?.close();
-      if (rescanTimer) clearInterval(rescanTimer);
+      clearInterval(rescanTimer);
     }
   });
 }

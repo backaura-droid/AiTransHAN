@@ -2,9 +2,14 @@
 // (Ruling: 계획의 "위아래로 쌓기" 대신 사용자 요청으로 좌우 2단 배치. appendEntry/appendError 시그니처는 계획과 동일.)
 import * as vscode from 'vscode';
 
+// 리뷰 I5: webview.html을 통째로 재할당하면 스크롤이 맨 위로 리셋된다.
+// 최신 항목을 맨 위에 두면 리셋돼도 방금 들어온 항목이 바로 보인다.
+// entriesHtml을 무한히 이어붙이지 않도록 최근 MAX_ENTRIES개까지만 남긴다.
+const MAX_ENTRIES = 200;
+
 export class ThinkingPanel implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
-  private entriesHtml = '';
+  private entries: string[] = [];
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -13,13 +18,23 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
   }
 
   appendEntry(original: string, translated: string): void {
-    this.entriesHtml += `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko">${escapeHtml(translated)}</div></div>`;
+    this.entries.unshift(
+      `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko">${escapeHtml(translated)}</div></div>`
+    );
+    this.trim();
     this.render();
   }
 
   appendError(message: string): void {
-    this.entriesHtml += `<div class="entry error">${escapeHtml(message)}</div>`;
+    this.entries.unshift(`<div class="entry error">${escapeHtml(message)}</div>`);
+    this.trim();
     this.render();
+  }
+
+  private trim(): void {
+    if (this.entries.length > MAX_ENTRIES) {
+      this.entries.length = MAX_ENTRIES;
+    }
   }
 
   private render(): void {
@@ -34,7 +49,7 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
         .empty { padding: 8px; color: var(--vscode-descriptionForeground); }
       </style>
     `;
-    const body = this.entriesHtml || '<div class="empty">대기 중</div>';
+    const body = this.entries.length > 0 ? this.entries.join('') : '<div class="empty">대기 중</div>';
     this.view.webview.html = `<body>${style}${body}</body>`;
   }
 }

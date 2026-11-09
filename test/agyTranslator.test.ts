@@ -31,3 +31,20 @@ test('실행 후 임시 파일을 정리한다', async () => {
   await writeAndRunAgy('임시 파일 정리 확인', { tempDir: dir, commandBuilder: echoBuilder });
   assert.deepEqual(fs.readdirSync(dir), []);
 });
+
+// 리뷰 I1: agy 호출에 타임아웃이 없어 응답 없는 호출이 큐를 영원히 막았다.
+test('너무 오래 걸리면 타임아웃으로 실패한다', async () => {
+  const dir = tmpDir();
+  const slowBuilder = () => 'ping -n 5 127.0.0.1 >NUL';
+  await assert.rejects(
+    writeAndRunAgy('아무 텍스트', { tempDir: dir, commandBuilder: slowBuilder, timeoutMs: 300 })
+  );
+});
+
+// 리뷰 I4: exec에 cwd를 지정하지 않아 agy가 확장 호스트의 임의 작업 디렉터리를 물려받았다.
+test('실행 디렉터리가 임시 폴더로 설정된다', async () => {
+  const dir = tmpDir();
+  const cwdBuilder = () => 'cmd /c cd';
+  const result = await writeAndRunAgy('텍스트', { tempDir: dir, commandBuilder: cwdBuilder });
+  assert.equal(path.resolve(result.trim()), path.resolve(dir));
+});

@@ -7,7 +7,11 @@ import { exec } from 'node:child_process';
 export interface WriteAndRunAgyOptions {
   tempDir: string;
   commandBuilder?: (tempFilePath: string) => string;
+  /** 리뷰 I1: 응답 없는 agy 호출이 큐를 영원히 막지 않도록 — 기본 2분 */
+  timeoutMs?: number;
 }
+
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 function defaultCommandBuilder(tempFilePath: string): string {
   // 주의(Task 6 Ruling): 설계 문서가 가정한 `cmd /c type <file> | agy -p ...` 파이프 방식은
@@ -26,17 +30,23 @@ export function writeAndRunAgy(text: string, options: WriteAndRunAgyOptions): Pr
   const command = (options.commandBuilder ?? defaultCommandBuilder)(tempFilePath);
 
   return new Promise<string>((resolve, reject) => {
-    exec(command, (error, stdout) => {
-      try {
-        fs.unlinkSync(tempFilePath);
-      } catch {
-        // 이미 지워졌거나 정리 실패해도 번역 결과 처리를 막지 않는다
+    // 리뷰 I1(timeout): 응답 없는 호출이 큐를 영원히 막지 않게 한다.
+    // 리뷰 I4(cwd): 확장 호스트의 임의 작업 디렉터리를 물려받지 않고 임시 폴더로 고정한다.
+    exec(
+      command,
+      { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, cwd: options.tempDir },
+      (error, stdout) => {
+        try {
+          fs.unlinkSync(tempFilePath);
+        } catch {
+          // 이미 지워졌거나 정리 실패해도 번역 결과 처리를 막지 않는다
+        }
+        if (error) {
+          reject(error);
+        } else {
+          resolve(stdout);
+        }
       }
-      if (error) {
-        reject(error);
-      } else {
-        resolve(stdout);
-      }
-    });
+    );
   });
 }
