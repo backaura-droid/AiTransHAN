@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { ThinkingPanel } from './panel/thinkingPanel';
+import { ThinkingPanel, escapeHtml } from './panel/thinkingPanel';
 import { findAllActiveSessionFiles } from './sessionLocator';
 import { tailOnce } from './jsonlTailer';
 import { pickTranslatable } from './thinkingFilter';
@@ -32,29 +32,43 @@ function sessionTitle(file: string): string {
   return `사고 번역 — ${path.basename(file, '.jsonl').slice(0, 8)}`;
 }
 
-// 사이드바는 세션별 번역 내용을 담지 않는다(그걸 담으면 다시 한 패널에 다 섞인다) — 상태만 보여준다.
+// 사이드바는 세션별 번역 내용을 담지 않는다(그걸 담으면 다시 한 패널에 다 섞인다) — 상태 + 닫은 세션 다시 열기만 담당한다.
+// 닫은 창을 다시 열 방법이 없었던 문제(2026-11-10)의 해결책 — enableCommandUris로 enableScripts 없이 명령 링크를 낸다.
+const REOPEN_COMMAND = 'claudeThinkingKo.reopenSession';
+
 class StatusPanel implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private count = 0;
+  private closed: Array<{ file: string; title: string }> = [];
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
-    webviewView.webview.options = { enableScripts: false };
+    webviewView.webview.options = { enableScripts: false, enableCommandUris: [REOPEN_COMMAND] };
     this.render();
   }
 
-  setCount(count: number): void {
+  update(count: number, closed: Array<{ file: string; title: string }>): void {
     this.count = count;
+    this.closed = closed;
     this.render();
   }
 
   private render(): void {
     if (!this.view) return;
-    const body =
+    const status =
       this.count > 0
         ? `<p>활성 세션 ${this.count}개를 감시 중입니다.</p><p>세션마다 별도 창이 자동으로 열립니다.</p>`
         : '<p>대기 중 — 이 워크스페이스에서 Claude Code 대화가 시작되면 번역창이 자동으로 열립니다.</p>';
-    this.view.webview.html = `<body style="font-family:var(--vscode-font-family);font-size:12px;padding:10px;color:var(--vscode-foreground)">${body}</body>`;
+    const closedSection =
+      this.closed.length > 0
+        ? `<p>닫은 세션:</p><ul>${this.closed
+            .map((s) => {
+              const args = encodeURIComponent(JSON.stringify([s.file]));
+              return `<li><a href="command:${REOPEN_COMMAND}?${args}">${escapeHtml(s.title)} 다시 열기</a></li>`;
+            })
+            .join('')}</ul>`
+        : '';
+    this.view.webview.html = `<body style="font-family:var(--vscode-font-family);font-size:12px;padding:10px;color:var(--vscode-foreground)">${status}${closedSection}</body>`;
   }
 }
 
@@ -102,8 +116,23 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', status));
 
   const sessions = new Map<string, SessionController>();
-  // 사용자가 직접 닫은 세션 창은 다시 자동으로 열지 않는다.
-  const closedByUser = new Set<string>();
+  // 사용자가 직접 닫은 세션 창은 다시 자동으로 열지 않는다(제목은 사이드바 "다시 열기" 목록에 씀).
+  const closedByUser = new Map<string, string>();
+
+  function updateStatus(): void {
+    status.update(
+      sessions.size,
+      [...closedByUser.entries()].map(([file, title]) => ({ file, title }))
+    );
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(REOPEN_COMMAND, (file: string) => {
+      if (!closedByUser.has(file) || sessions.has(file)) return;
+      closedByUser.delete(file);
+      createSession(file);
+    })
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeThinkingKo.clear', () => {
@@ -199,12 +228,12 @@ export function activate(context: vscode.ExtensionContext): void {
     webviewPanel.onDidDispose(() => {
       controller.watcher?.close();
       sessions.delete(file);
-      closedByUser.add(file);
-      status.setCount(sessions.size);
+      closedByUser.set(file, sessionTitle(file));
+      updateStatus();
     });
 
     sessions.set(file, controller);
-    status.setCount(sessions.size);
+    updateStatus();
   }
 
   function reconcileSessions(): void {
