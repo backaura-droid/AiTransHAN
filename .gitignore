@@ -1,3 +1,8 @@
+# Node / VSCode 확장 빌드 산출물
+node_modules/
+out/
+*.vsix
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
