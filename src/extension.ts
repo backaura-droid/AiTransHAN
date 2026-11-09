@@ -57,6 +57,12 @@ export function activate(context: vscode.ExtensionContext): void {
     })
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand('claudeThinkingKo.clear', () => {
+      panel.clear();
+    })
+  );
+
   // 리뷰 I3: togglePause는 워크스페이스가 없어도(아래 가드 이전에) 항상 등록해야
   // "명령을 찾을 수 없음" 오류 없이 동작한다.
   context.subscriptions.push(

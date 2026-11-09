@@ -52,6 +52,11 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  clear(): void {
+    this.entries = [];
+    this.render();
+  }
+
   private trim(): void {
     if (this.entries.length > MAX_ENTRIES) {
       this.entries.length = MAX_ENTRIES;

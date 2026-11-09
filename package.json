@@ -38,6 +38,11 @@
         "command": "claudeThinkingKo.togglePause",
         "title": "Claude 사고 번역: 일시정지/재개",
         "icon": "$(debug-pause)"
+      },
+      {
+        "command": "claudeThinkingKo.clear",
+        "title": "Claude 사고 번역: 지우기",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -51,6 +56,11 @@
           "command": "claudeThinkingKo.togglePause",
           "when": "view == claudeThinkingKo.panel",
           "group": "navigation@2"
+        },
+        {
+          "command": "claudeThinkingKo.clear",
+          "when": "view == claudeThinkingKo.panel",
+          "group": "navigation@3"
         }
       ],
       "editor/title": [

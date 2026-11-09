@@ -39,3 +39,15 @@ test('번역 에러 기록 시 원문이 함께 주어지면 원문도 보존해
   assert.ok(view.webview.html.includes('original thinking text'));
   assert.ok(view.webview.html.includes('타임아웃 오류'));
 });
+
+test('clear()를 호출하면 쌓인 항목이 전부 지워지고 대기 중 문구로 돌아간다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendEntry('original', 'translated');
+  panel.appendError('오류', '원문');
+  panel.clear();
+  assert.ok(!view.webview.html.includes('translated'));
+  assert.ok(!view.webview.html.includes('오류'));
+  assert.ok(view.webview.html.includes('대기 중'));
+});
