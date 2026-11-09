@@ -1,4 +1,4 @@
-// sessionLocator의 cwd 매칭·최신 mtime 선택·깨진 파일 무시·감시 전환 결정을 검증하는 테스트
+// sessionLocator의 cwd 매칭·최신 mtime 선택·깨진 파일 무시·대용량 헤더·감시 전환 결정을 검증하는 테스트
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
@@ -58,6 +58,21 @@ test('cwd가 첫 줄이 아니라 뒤쪽 줄에 있어도 찾는다', () => {
   assert.equal(findActiveSessionFile(root, '/my/workspace'), file);
 });
 
+// 교차검증 보강: 첫 줄(queue-operation)에 대용량 이미지(1.2MB)가 들어있어 cwd가 1MB 뒤에 나와도 찾는다
+test('앞줄이 1MB를 초과해 cwd가 1MB 뒤에 있는 대용량 세션 파일도 찾는다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const hugePayload = 'A'.repeat(1200 * 1024);
+  const lines = [
+    JSON.stringify({ type: 'queue-operation', payload: hugePayload }),
+    JSON.stringify({ cwd: '/my/workspace', type: 'user' })
+  ];
+  const file = path.join(dir, 'huge-head.jsonl');
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  assert.equal(findActiveSessionFile(root, '/my/workspace'), file);
+});
+
 test('드라이브 문자 대소문자가 달라도 같은 경로로 본다(윈도우)', () => {
   const root = makeFixture();
   const dir = path.join(root, 'ws1');
@@ -82,6 +97,13 @@ test('이미 보고 있는 파일과 같으면 변경 없음', () => {
 test('다른 파일로 바뀌면 새 대화로 보고 처음부터 본다', () => {
   assert.deepEqual(decideNextWatch('/a/new.jsonl', '/a/old.jsonl'), {
     file: '/a/new.jsonl',
+    startFromBeginning: true
+  });
+});
+
+test('감시 에러로 currentlyWatching이 null이 되었더라도 이미 초기화된 이후라면 새 파일을 처음부터 본다', () => {
+  assert.deepEqual(decideNextWatch('/a/recovered.jsonl', null, true), {
+    file: '/a/recovered.jsonl',
     startFromBeginning: true
   });
 });

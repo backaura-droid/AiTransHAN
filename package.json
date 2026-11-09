@@ -1,31 +1,70 @@
 {
   "name": "claude-thinking-ko",
+  "publisher": "local",
   "displayName": "Claude 사고 한글 보기",
   "description": "Claude Code 세션의 사고(thinking) 블록을 한국어로 번역해 보여주는 패널",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "engines": { "vscode": "^1.85.0" },
   "main": "./out/src/extension.js",
   "activationEvents": ["onStartupFinished"],
   "contributes": {
     "viewsContainers": {
-      "activitybar": [
-        { "id": "claudeThinkingKo", "title": "Claude 사고 번역", "icon": "resources/icon.svg" }
+      "secondarySidebar": [
+        {
+          "id": "claudeThinkingKo",
+          "title": "사고 번역",
+          "icon": "resources/icon.svg"
+        }
       ]
     },
     "views": {
       "claudeThinkingKo": [
-        { "id": "claudeThinkingKo.panel", "name": "사고 번역", "type": "webview" }
+        {
+          "id": "claudeThinkingKo.panel",
+          "name": "사고 번역",
+          "type": "webview"
+        }
       ]
     },
     "commands": [
-      { "command": "claudeThinkingKo.togglePause", "title": "Claude 사고 번역: 일시정지/재개" }
-    ]
+      {
+        "command": "claudeThinkingKo.openWindow",
+        "title": "Claude 사고 번역: 별도 번역창 열기",
+        "icon": "resources/icon.svg"
+      },
+      {
+        "command": "claudeThinkingKo.togglePause",
+        "title": "Claude 사고 번역: 일시정지/재개",
+        "icon": "$(debug-pause)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "claudeThinkingKo.openWindow",
+          "when": "view == claudeThinkingKo.panel",
+          "group": "navigation@1"
+        },
+        {
+          "command": "claudeThinkingKo.togglePause",
+          "when": "view == claudeThinkingKo.panel",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "claudeThinkingKo.openWindow",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "compile": "tsc -p .",
     "test": "tsc -p . && node --test out/test/*.test.js",
-    "package": "vsce package"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "typescript": "^5.6.0",

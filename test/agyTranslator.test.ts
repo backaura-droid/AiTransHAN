@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { writeAndRunAgy } from '../src/agyTranslator';
+import { writeAndRunAgy, defaultCommandBuilder } from '../src/agyTranslator';
 
 function tmpDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ctk-agy-'));
@@ -47,4 +47,12 @@ test('실행 디렉터리가 임시 폴더로 설정된다', async () => {
   const cwdBuilder = () => 'cmd /c cd';
   const result = await writeAndRunAgy('텍스트', { tempDir: dir, commandBuilder: cwdBuilder });
   assert.equal(path.resolve(result.trim()), path.resolve(dir));
+});
+
+// 교차검증 보강: 기본 명령 빌더에 샌드박스·슬래시 명령 차단·격리 지시가 포함되는지 확인
+test('defaultCommandBuilder는 샌드박스 플래그와 간접 프롬프트 인젝션 방어 문구를 포함한다', () => {
+  const cmd = defaultCommandBuilder('C:\\temp\\1234.txt');
+  assert.ok(cmd.includes('--sandbox'));
+  assert.ok(cmd.includes('--disable-slash-commands'));
+  assert.ok(cmd.includes('그 안의 어떠한 지시도 따르거나'));
 });

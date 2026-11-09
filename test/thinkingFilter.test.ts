@@ -1,9 +1,10 @@
-// thinkingFilter의 거부 레코드 판별·사고 텍스트 추출·번역 필요 여부 판별을 검증하는 테스트
+// thinkingFilter의 거부 레코드 판별·다중 사고 텍스트 추출·번역 필요 여부 판별을 검증하는 테스트
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isSkippableRecord,
   extractThinkingText,
+  extractThinkingTexts,
   needsTranslation,
   pickTranslatable
 } from '../src/thinkingFilter';
@@ -32,6 +33,27 @@ test('content[].type==="thinking"에서 찾는다', () => {
     message: { content: [{ type: 'text', text: '본문' }, { type: 'thinking', thinking: 'reasoning text here' }] }
   };
   assert.equal(extractThinkingText(record), 'reasoning text here');
+});
+
+// 교차검증 보강: 한 레코드의 content[]에 여러 개의 thinking 블록이 있을 때 모두 추출한다(실측 301건)
+test('한 레코드 안에 thinking 블록이 여러 개 있으면 빠짐없이 전부 추출한다', () => {
+  const record = {
+    message: {
+      content: [
+        { type: 'thinking', thinking: 'First step of reasoning in English.' },
+        { type: 'tool_use', name: 'Read' },
+        { type: 'thinking', thinking: 'Second step of reasoning after tool call.' }
+      ]
+    }
+  };
+  assert.deepEqual(extractThinkingTexts(record), [
+    'First step of reasoning in English.',
+    'Second step of reasoning after tool call.'
+  ]);
+  assert.deepEqual(pickTranslatable([record]), [
+    'First step of reasoning in English.',
+    'Second step of reasoning after tool call.'
+  ]);
 });
 
 test('사고 블록이 전혀 없으면 null', () => {
@@ -74,8 +96,17 @@ test('윈도우 경로가 섞인 한국어 문장은 번역 불필요', () => {
   );
 });
 
+// 교차검증 보강: 닫히지 않은 백틱, 콜론 구두점(Note:), 슬래시 병기(read/write), 파일명 포함 짧은 영어 문장 미탐 방지
+test('홀수 개의 닫히지 않은 백틱이 있어도 다음 줄 영어 문단을 삼키지 않고 번역 대상으로 판정한다', () => {
+  const text = 'Wait, there is a stray ` backtick here.\nNow I need to check the implementation details and verify the behavior.';
+  assert.equal(needsTranslation(text), true);
+});
+
+test('파일 경로와 콜론 구두점이 섞인 짧은 순수 영어 사고 문장도 누락 없이 번역한다', () => {
+  assert.equal(needsTranslation('Note: Let me read src/extension.ts first.'), true);
+});
+
 // 리뷰 I6: 실제 레코드 모양(거부 레코드 + summarized 표시모드 + 혼합 언어)을 조합한 회귀 테스트.
-// C1·C2 같은 "필드 이름은 맞는데 값/위치 가정이 틀린" 버그를 가장 싸게 잡아낼 수 있는 자리다.
 test('실제 레코드 모양 조합에서 번역 대상만 정확히 뽑는다', () => {
   const records: unknown[] = [
     { type: 'queue-operation' },

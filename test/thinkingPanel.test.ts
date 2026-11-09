@@ -30,3 +30,12 @@ test('항목이 너무 많이 쌓이면 오래된 것부터 버린다', () => {
   assert.ok(!view.webview.html.includes('ko-0'), '오래된 항목은 잘려나가야 한다');
   assert.ok(view.webview.html.includes('ko-249'), '최신 항목은 남아있어야 한다');
 });
+
+test('번역 에러 기록 시 원문이 함께 주어지면 원문도 보존해 표시한다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendError('타임아웃 오류', 'original thinking text');
+  assert.ok(view.webview.html.includes('original thinking text'));
+  assert.ok(view.webview.html.includes('타임아웃 오류'));
+});
