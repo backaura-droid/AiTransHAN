@@ -28,8 +28,28 @@ function resolveProjectsRoot(): string {
   return path.join(configDir, 'projects');
 }
 
-function sessionTitle(file: string): string {
+function fallbackSessionTitle(file: string): string {
   return `사고 번역 — ${path.basename(file, '.jsonl').slice(0, 8)}`;
+}
+
+// 2026-11-10: 탭 진단 로그로 확인됨 — Claude Code 대화 탭은 이 viewType을 쓰고,
+// label에 실제 대화 제목이 그대로 들어있다. 다만 "그 탭이 어느 세션 파일인지"는 이 API로 알 수 없다.
+// 그래서 "새 세션을 막 발견한 순간 포커스돼 있던 Claude Code 탭" 제목을 가져다 쓴다(휴리스틱).
+// 틀려도 제목만 어긋날 뿐 기능에는 영향 없다.
+const CLAUDE_CODE_TAB_VIEWTYPE = 'mainThreadWebview-claudeVSCodePanel';
+
+function findActiveClaudeCodeTabLabel(): string | null {
+  for (const group of vscode.window.tabGroups.all) {
+    if (!group.isActive) continue;
+    for (const tab of group.tabs) {
+      if (!tab.isActive) continue;
+      const input = tab.input as { viewType?: string } | undefined;
+      if (input?.viewType === CLAUDE_CODE_TAB_VIEWTYPE) {
+        return tab.label;
+      }
+    }
+  }
+  return null;
 }
 
 // 사이드바는 세션별 번역 내용을 담지 않는다(그걸 담으면 다시 한 패널에 다 섞인다) — 상태 + 닫은 세션 다시 열기만 담당한다.
@@ -74,44 +94,14 @@ class StatusPanel implements vscode.WebviewViewProvider {
 
 interface SessionController {
   file: string;
+  title: string;
   panel: ThinkingPanel;
   watcher: fs.FSWatcher;
   offset: number;
   paused: boolean;
 }
 
-// 임시 조사용(2026-11-10): "활성 Claude Code 탭을 따라가는 단일 패널"이 가능한지 확인하려고
-// 탭 메타정보(제목·활성 여부·webview viewType)를 파일로 남긴다. 결론 나면 제거하거나 정식 기능으로 바꾼다.
-function logTabDiagnostics(logPath: string): void {
-  try {
-    const lines: string[] = [`--- ${new Date().toISOString()} ---`];
-    for (const group of vscode.window.tabGroups.all) {
-      for (const tab of group.tabs) {
-        const input = tab.input as { viewType?: string } | undefined;
-        lines.push(
-          JSON.stringify({
-            label: tab.label,
-            tabIsActive: tab.isActive,
-            groupIsActive: group.isActive,
-            inputCtor: input?.constructor?.name,
-            viewType: input?.viewType
-          })
-        );
-      }
-    }
-    fs.appendFileSync(logPath, lines.join('\n') + '\n');
-  } catch {
-    // 조사용 코드라 실패해도 본 기능에 영향 주지 않는다
-  }
-}
-
 export function activate(context: vscode.ExtensionContext): void {
-  const tabLogPath = path.join(context.globalStorageUri.fsPath, 'tab-diagnostics.log');
-  fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
-  logTabDiagnostics(tabLogPath);
-  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabGroups(() => logTabDiagnostics(tabLogPath)));
-  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(() => logTabDiagnostics(tabLogPath)));
-
   const status = new StatusPanel();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', status));
 
@@ -129,8 +119,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(REOPEN_COMMAND, (file: string) => {
       if (!closedByUser.has(file) || sessions.has(file)) return;
+      // 재오픈 시점의 활성 탭은 그 세션과 무관할 수 있으니, 닫히기 전 제목을 그대로 쓴다.
+      const previousTitle = closedByUser.get(file);
       closedByUser.delete(file);
-      createSession(file);
+      createSession(file, previousTitle);
     })
   );
 
@@ -170,11 +162,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const translate = (text: string) => writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
 
-  function createSession(file: string): void {
+  function createSession(file: string, preferredTitle?: string): void {
+    const activeLabel = findActiveClaudeCodeTabLabel();
+    const title = preferredTitle ?? (activeLabel ? `사고 번역 — ${activeLabel}` : fallbackSessionTitle(file));
+
     const panel = new ThinkingPanel();
     const webviewPanel = vscode.window.createWebviewPanel(
       'claudeThinkingKo.window',
-      sessionTitle(file),
+      title,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
       { enableScripts: false, retainContextWhenHidden: true }
     );
@@ -182,6 +177,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     const controller: SessionController = {
       file,
+      title,
       panel,
       // 새로 발견된 세션은 지금부터만 본다(과거분 스킵 — 전역 제약과 동일 원칙).
       offset: (() => {
@@ -228,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
     webviewPanel.onDidDispose(() => {
       controller.watcher?.close();
       sessions.delete(file);
-      closedByUser.set(file, sessionTitle(file));
+      closedByUser.set(file, controller.title);
       updateStatus();
     });
 
