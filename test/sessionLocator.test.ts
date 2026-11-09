@@ -1,10 +1,10 @@
-// sessionLocator의 cwd 매칭·최신 mtime 선택·깨진 파일 무시·대용량 헤더·감시 전환 결정을 검증하는 테스트
+// sessionLocator의 cwd 매칭·최신 mtime 선택·깨진 파일 무시·대용량 헤더·다중 활성 세션 수집을 검증하는 테스트
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { findActiveSessionFile, decideNextWatch } from '../src/sessionLocator';
+import { findActiveSessionFile, findAllActiveSessionFiles } from '../src/sessionLocator';
 
 function makeFixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ctk-'));
@@ -82,32 +82,47 @@ test('드라이브 문자 대소문자가 달라도 같은 경로로 본다(윈�
   assert.equal(findActiveSessionFile(root, 'e:\\Hermes_Obsidian'), file);
 });
 
-// 리뷰 C3: 세션 파일을 한 번 찾으면 영구히 고정돼 새 대화(새 jsonl)를 못 따라갔다.
-test('처음 찾았을 때는 끝부터 보라고 한다(과거분 스킵)', () => {
-  assert.deepEqual(decideNextWatch('/a/file.jsonl', null), {
-    file: '/a/file.jsonl',
-    startFromBeginning: false
-  });
+// 다중 세션: "창마다 다른 번역 프로그램" 요청의 기반이 되는 함수.
+test('cwd가 일치하는 활성 세션을 전부, 최신순으로 반환한다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const a = path.join(dir, 'a.jsonl');
+  const b = path.join(dir, 'b.jsonl');
+  const other = path.join(dir, 'other.jsonl');
+  fs.writeFileSync(a, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  fs.writeFileSync(b, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  fs.writeFileSync(other, JSON.stringify({ cwd: '/다른/워크스페이스' }) + '\n');
+  const now = Date.now();
+  fs.utimesSync(a, new Date(now - 5000), new Date(now - 5000));
+  fs.utimesSync(b, new Date(now), new Date(now));
+  const result = findAllActiveSessionFiles(root, '/my/workspace', { now });
+  assert.deepEqual(result.map((r) => r.file), [b, a]);
 });
 
-test('이미 보고 있는 파일과 같으면 변경 없음', () => {
-  assert.equal(decideNextWatch('/a/file.jsonl', '/a/file.jsonl'), null);
+test('너무 오래 전에 쓰인 세션은 제외한다(기본 30분)', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const fresh = path.join(dir, 'fresh.jsonl');
+  const stale = path.join(dir, 'stale.jsonl');
+  fs.writeFileSync(fresh, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  fs.writeFileSync(stale, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  const now = Date.now();
+  fs.utimesSync(fresh, new Date(now - 60 * 1000), new Date(now - 60 * 1000));
+  fs.utimesSync(stale, new Date(now - 40 * 60 * 1000), new Date(now - 40 * 60 * 1000));
+  const result = findAllActiveSessionFiles(root, '/my/workspace', { now });
+  assert.deepEqual(result.map((r) => r.file), [fresh]);
 });
 
-test('다른 파일로 바뀌면 새 대화로 보고 처음부터 본다', () => {
-  assert.deepEqual(decideNextWatch('/a/new.jsonl', '/a/old.jsonl'), {
-    file: '/a/new.jsonl',
-    startFromBeginning: true
-  });
-});
-
-test('감시 에러로 currentlyWatching이 null이 되었더라도 이미 초기화된 이후라면 새 파일을 처음부터 본다', () => {
-  assert.deepEqual(decideNextWatch('/a/recovered.jsonl', null, true), {
-    file: '/a/recovered.jsonl',
-    startFromBeginning: true
-  });
-});
-
-test('세션을 못 찾으면 null(기존 감시 유지)', () => {
-  assert.equal(decideNextWatch(null, '/a/old.jsonl'), null);
+test('maxAgeMs를 직접 지정할 수 있다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'a.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  const now = Date.now();
+  fs.utimesSync(file, new Date(now - 120 * 1000), new Date(now - 120 * 1000));
+  assert.deepEqual(findAllActiveSessionFiles(root, '/my/workspace', { now, maxAgeMs: 60 * 1000 }), []);
+  assert.equal(findAllActiveSessionFiles(root, '/my/workspace', { now, maxAgeMs: 300 * 1000 }).length, 1);
 });

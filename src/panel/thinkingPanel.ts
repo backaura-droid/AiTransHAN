@@ -1,5 +1,6 @@
-// 사고 블록을 영어 원문|한글 번역 2단으로 나란히 쌓아 보여주는 webview 패널
-// 보조 사이드바(WebviewView)와 독립 번역창(WebviewPanel) 양쪽을 모두 실시간 동기화한다.
+// 사고 블록을 영어 원문|한글 번역 2단으로 나란히 쌓아 보여주는 webview 패널.
+// 세션(대화)마다 독립된 창을 자동으로 여는 구조라, 인스턴스 하나당 독립 창(WebviewPanel) 하나에 묶인다
+// ("창마다 다른 번역창" 요청, 2026-11-10 — 여러 Claude Code 탭의 사고가 패널 하나에 섞이던 문제의 해결책).
 import type * as vscode from 'vscode';
 
 // 리뷰 I5: webview.html을 통째로 재할당하면 스크롤이 맨 위로 리셋된다.
@@ -7,16 +8,9 @@ import type * as vscode from 'vscode';
 // entriesHtml을 무한히 이어붙이지 않도록 최근 MAX_ENTRIES개까지만 남긴다.
 const MAX_ENTRIES = 200;
 
-export class ThinkingPanel implements vscode.WebviewViewProvider {
-  private view: vscode.WebviewView | undefined;
+export class ThinkingPanel {
   private standalonePanel: vscode.WebviewPanel | undefined;
   private entries: string[] = [];
-
-  resolveWebviewView(webviewView: vscode.WebviewView): void {
-    this.view = webviewView;
-    webviewView.webview.options = { enableScripts: false };
-    this.render();
-  }
 
   attachStandalonePanel(panel: vscode.WebviewPanel): void {
     this.standalonePanel = panel;
@@ -26,10 +20,6 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
       }
     });
     this.render();
-  }
-
-  getStandalonePanel(): vscode.WebviewPanel | undefined {
-    return this.standalonePanel;
   }
 
   appendEntry(original: string, translated: string): void {
@@ -86,12 +76,8 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
   }
 
   private render(): void {
-    const html = this.buildHtml();
-    if (this.view) {
-      this.view.webview.html = html;
-    }
     if (this.standalonePanel) {
-      this.standalonePanel.webview.html = html;
+      this.standalonePanel.webview.html = this.buildHtml();
     }
   }
 }

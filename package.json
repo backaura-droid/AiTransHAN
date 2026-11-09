@@ -30,43 +30,27 @@
     },
     "commands": [
       {
-        "command": "claudeThinkingKo.openWindow",
-        "title": "Claude 사고 번역: 별도 번역창 열기",
-        "icon": "resources/icon.svg"
-      },
-      {
         "command": "claudeThinkingKo.togglePause",
-        "title": "Claude 사고 번역: 일시정지/재개",
+        "title": "Claude 사고 번역: 전체 일시정지/재개",
         "icon": "$(debug-pause)"
       },
       {
         "command": "claudeThinkingKo.clear",
-        "title": "Claude 사고 번역: 지우기",
+        "title": "Claude 사고 번역: 전체 지우기",
         "icon": "$(clear-all)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "claudeThinkingKo.openWindow",
+          "command": "claudeThinkingKo.togglePause",
           "when": "view == claudeThinkingKo.panel",
           "group": "navigation@1"
         },
         {
-          "command": "claudeThinkingKo.togglePause",
-          "when": "view == claudeThinkingKo.panel",
-          "group": "navigation@2"
-        },
-        {
           "command": "claudeThinkingKo.clear",
           "when": "view == claudeThinkingKo.panel",
-          "group": "navigation@3"
-        }
-      ],
-      "editor/title": [
-        {
-          "command": "claudeThinkingKo.openWindow",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ]
     }

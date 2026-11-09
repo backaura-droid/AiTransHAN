@@ -86,16 +86,21 @@ function sameCwd(a: string, b: string): boolean {
   return ra === rb;
 }
 
-export function findActiveSessionFile(projectsRoot: string, workspaceCwd: string): string | null {
-  if (!fs.existsSync(projectsRoot)) return null;
+export interface SessionFileInfo {
+  file: string;
+  mtimeMs: number;
+}
 
-  const candidates: Array<{ file: string; mtimeMs: number }> = [];
+function listJsonlCandidates(projectsRoot: string): SessionFileInfo[] {
+  if (!fs.existsSync(projectsRoot)) return [];
+
+  const candidates: SessionFileInfo[] = [];
 
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(projectsRoot, { withFileTypes: true });
   } catch {
-    return null;
+    return [];
   }
 
   for (const entry of entries) {
@@ -119,35 +124,50 @@ export function findActiveSessionFile(projectsRoot: string, workspaceCwd: string
     }
   }
 
-  // 교차검증 최적화: mtimeMs 최신순으로 먼저 정렬해 가장 최근 파일부터 cwd를 확인한다.
-  // 첫 매칭을 찾으면 즉시 반환하므로 과거 세션 수백 개를 매번 읽지 않는다.
+  // mtimeMs 최신순으로 정렬해 가장 최근 파일부터 다룬다.
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates;
+}
 
-  for (const candidate of candidates) {
+export function findActiveSessionFile(projectsRoot: string, workspaceCwd: string): string | null {
+  // 첫 매칭을 찾으면 즉시 반환하므로 과거 세션 수백 개를 매번 읽지 않는다.
+  for (const candidate of listJsonlCandidates(projectsRoot)) {
     const cwd = findCwdInHead(candidate.file);
     if (cwd !== null && sameCwd(cwd, workspaceCwd)) {
       return candidate.file;
     }
   }
-
   return null;
 }
 
-export interface WatchDecision {
-  file: string;
-  /** true면 파일을 처음부터 본다(활성화 중 새로 생긴 대화) — false면 끝부터만 본다(과거분 스킵) */
-  startFromBeginning: boolean;
+const DEFAULT_MAX_AGE_MS = 30 * 60 * 1000; // 30분 — 이보다 오래 안 쓴 세션은 새 번역창을 자동으로 열지 않는다
+
+export interface FindAllActiveOptions {
+  /** 테스트용 — 생략하면 Date.now() */
+  now?: number;
+  /** 이보다 오래된(마지막 수정 기준) 세션은 제외 — 기본 30분 */
+  maxAgeMs?: number;
 }
 
-// 리뷰 C3 + 교차검증 보강:
-// 매 재탐색마다 이 함수로 "바뀌었는지, 바뀌었다면 어디서부터 볼지"를 판단한다.
-// hasInitialized가 true면(감시 중 에러로 currentlyWatching이 잠시 null이 된 뒤 복구되는 경우 포함) 처음부터 읽는다.
-export function decideNextWatch(
-  foundFile: string | null,
-  currentlyWatching: string | null,
-  hasInitialized: boolean = currentlyWatching !== null
-): WatchDecision | null {
-  if (!foundFile) return null;
-  if (foundFile === currentlyWatching) return null;
-  return { file: foundFile, startFromBeginning: hasInitialized };
+// 다중 세션 지원: "창마다 다른 번역창" 요청에 따라 워크스페이스에 맞는 활성 세션을
+// 하나만 고르지 않고 최근(기본 30분 이내) 것을 전부, 최신순으로 반환한다.
+// 나이 필터를 cwd 확인보다 먼저 적용해 오래된 파일의 헤더는 아예 읽지 않는다.
+export function findAllActiveSessionFiles(
+  projectsRoot: string,
+  workspaceCwd: string,
+  options: FindAllActiveOptions = {}
+): SessionFileInfo[] {
+  const now = options.now ?? Date.now();
+  const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+
+  const fresh = listJsonlCandidates(projectsRoot).filter((c) => now - c.mtimeMs <= maxAgeMs);
+
+  const matches: SessionFileInfo[] = [];
+  for (const candidate of fresh) {
+    const cwd = findCwdInHead(candidate.file);
+    if (cwd !== null && sameCwd(cwd, workspaceCwd)) {
+      matches.push(candidate);
+    }
+  }
+  return matches;
 }
