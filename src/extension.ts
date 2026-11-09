@@ -66,7 +66,38 @@ interface SessionController {
   paused: boolean;
 }
 
+// 임시 조사용(2026-11-10): "활성 Claude Code 탭을 따라가는 단일 패널"이 가능한지 확인하려고
+// 탭 메타정보(제목·활성 여부·webview viewType)를 파일로 남긴다. 결론 나면 제거하거나 정식 기능으로 바꾼다.
+function logTabDiagnostics(logPath: string): void {
+  try {
+    const lines: string[] = [`--- ${new Date().toISOString()} ---`];
+    for (const group of vscode.window.tabGroups.all) {
+      for (const tab of group.tabs) {
+        const input = tab.input as { viewType?: string } | undefined;
+        lines.push(
+          JSON.stringify({
+            label: tab.label,
+            tabIsActive: tab.isActive,
+            groupIsActive: group.isActive,
+            inputCtor: input?.constructor?.name,
+            viewType: input?.viewType
+          })
+        );
+      }
+    }
+    fs.appendFileSync(logPath, lines.join('\n') + '\n');
+  } catch {
+    // 조사용 코드라 실패해도 본 기능에 영향 주지 않는다
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
+  const tabLogPath = path.join(context.globalStorageUri.fsPath, 'tab-diagnostics.log');
+  fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
+  logTabDiagnostics(tabLogPath);
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabGroups(() => logTabDiagnostics(tabLogPath)));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(() => logTabDiagnostics(tabLogPath)));
+
   const status = new StatusPanel();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', status));
 
