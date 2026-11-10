@@ -39,6 +39,19 @@ function fallbackSessionTitle(file: string): string {
 // 그래서 "새 세션을 막 발견한 순간 포커스돼 있던 Claude Code 탭" 제목을 가져다 쓴다(휴리스틱).
 // 틀려도 제목만 어긋날 뿐 기능에는 영향 없다.
 const CLAUDE_CODE_TAB_VIEWTYPE = 'mainThreadWebview-claudeVSCodePanel';
+const OUR_PANEL_VIEWTYPE = 'mainThreadWebview-claudeThinkingKo.window';
+
+// 2026-11-10: 같은 세션의 번역창이 중복으로 쌓이는 버그 — 재설치·재시작을 반복하는 동안 이전
+// 세대가 열어둔 창이 정리되지 않고 새 세대가 또 창을 띄운 것으로 보인다. VSCode 자체 기능이
+// 아니라 확장이 정리를 안 한 탓이라, 활성화할 때마다 우리 창을 전부 닫고 깨끗하게 다시 연다.
+function closeAllOurPanels(): void {
+  const ours = vscode.window.tabGroups.all.flatMap((group) =>
+    group.tabs.filter((tab) => (tab.input as { viewType?: string } | undefined)?.viewType === OUR_PANEL_VIEWTYPE)
+  );
+  if (ours.length > 0) {
+    void vscode.window.tabGroups.close(ours);
+  }
+}
 
 function findActiveClaudeCodeTabLabel(): string | null {
   for (const group of vscode.window.tabGroups.all) {
@@ -123,6 +136,8 @@ interface SessionController {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  closeAllOurPanels();
+
   const status = new StatusPanel();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', status));
 
