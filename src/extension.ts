@@ -12,7 +12,9 @@ import { pickTranslatable } from './thinkingFilter';
 import { TranslationQueue } from './translationQueue';
 import { writeAndRunAgy } from './agyTranslator';
 
-const RESCAN_INTERVAL_MS = 10000;
+// 2026-11-10: "1~5초 간격으로 체크해달라"는 요청으로 줄임 — 이건 세션 파일 유무를 훑는 것뿐이라
+// (번역 CLI 호출이 아님) 짧게 잡아도 "초마다 번역 호출 금지" 제약과는 무관하다.
+const RESCAN_INTERVAL_MS = 3000;
 
 function resolveProjectsRoot(): string {
   const envVars = vscode.workspace
@@ -50,6 +52,21 @@ function findActiveClaudeCodeTabLabel(): string | null {
     }
   }
   return null;
+}
+
+// "클로드 탭이 꺼지면 번역창도 지워달라" 요청용 — 포커스 여부와 무관하게 열려 있는 모든
+// Claude Code 탭의 제목을 모은다(닫혔는지 판정은 이 집합에 더 이상 없는지로 본다).
+function openClaudeCodeTabLabels(): Set<string> {
+  const labels = new Set<string>();
+  for (const group of vscode.window.tabGroups.all) {
+    for (const tab of group.tabs) {
+      const input = tab.input as { viewType?: string } | undefined;
+      if (input?.viewType === CLAUDE_CODE_TAB_VIEWTYPE) {
+        labels.add(tab.label);
+      }
+    }
+  }
+  return labels;
 }
 
 // 사이드바는 세션별 번역 내용을 담지 않는다(그걸 담으면 다시 한 패널에 다 섞인다) — 상태 + 닫은 세션 다시 열기만 담당한다.
@@ -95,7 +112,11 @@ class StatusPanel implements vscode.WebviewViewProvider {
 interface SessionController {
   file: string;
   title: string;
+  /** true면 title이 실제 열린 Claude Code 탭에서 가져온 것 — 이때만 탭이 닫혔는지 확인해 자동으로 닫는다.
+   *  false(대체 제목)면 어떤 탭과도 매칭할 근거가 없으므로 자동으로 닫지 않는다. */
+  titleFromTab: boolean;
   panel: ThinkingPanel;
+  webviewPanel: vscode.WebviewPanel;
   watcher: fs.FSWatcher;
   offset: number;
   paused: boolean;
@@ -107,12 +128,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const sessions = new Map<string, SessionController>();
   // 사용자가 직접 닫은 세션 창은 다시 자동으로 열지 않는다(제목은 사이드바 "다시 열기" 목록에 씀).
-  const closedByUser = new Map<string, string>();
+  const closedByUser = new Map<string, { title: string; titleFromTab: boolean }>();
 
   function updateStatus(): void {
     status.update(
       sessions.size,
-      [...closedByUser.entries()].map(([file, title]) => ({ file, title }))
+      [...closedByUser.entries()].map(([file, info]) => ({ file, title: info.title }))
     );
   }
 
@@ -120,9 +141,9 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand(REOPEN_COMMAND, (file: string) => {
       if (!closedByUser.has(file) || sessions.has(file)) return;
       // 재오픈 시점의 활성 탭은 그 세션과 무관할 수 있으니, 닫히기 전 제목을 그대로 쓴다.
-      const previousTitle = closedByUser.get(file);
+      const previous = closedByUser.get(file);
       closedByUser.delete(file);
-      createSession(file, previousTitle);
+      createSession(file, previous);
     })
   );
 
@@ -162,9 +183,16 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const translate = (text: string) => writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
 
-  function createSession(file: string, preferredTitle?: string): void {
-    const activeLabel = findActiveClaudeCodeTabLabel();
-    const title = preferredTitle ?? (activeLabel ? `사고 번역 — ${activeLabel}` : fallbackSessionTitle(file));
+  function createSession(file: string, preferred?: { title: string; titleFromTab: boolean }): void {
+    let title: string;
+    let titleFromTab: boolean;
+    if (preferred) {
+      ({ title, titleFromTab } = preferred);
+    } else {
+      const activeLabel = findActiveClaudeCodeTabLabel();
+      titleFromTab = activeLabel !== null;
+      title = activeLabel ? `사고 번역 — ${activeLabel}` : fallbackSessionTitle(file);
+    }
 
     const panel = new ThinkingPanel();
     const webviewPanel = vscode.window.createWebviewPanel(
@@ -180,7 +208,9 @@ export function activate(context: vscode.ExtensionContext): void {
     const controller: SessionController = {
       file,
       title,
+      titleFromTab,
       panel,
+      webviewPanel,
       // 새로 발견된 세션은 지금부터만 본다(과거분 스킵 — 전역 제약과 동일 원칙).
       offset: (() => {
         try {
@@ -203,14 +233,23 @@ export function activate(context: vscode.ExtensionContext): void {
 
     function handleChange(): void {
       if (controller.paused) return;
+      const now = new Date().toLocaleTimeString('ko-KR', { hour12: false });
       try {
         const { records, nextOffset } = tailOnce(file, controller.offset);
         controller.offset = nextOffset;
-        for (const text of pickTranslatable(records)) {
+        const translatable = pickTranslatable(records);
+        for (const text of translatable) {
           queue.enqueue(text);
         }
-      } catch {
-        // 일시적인 파일 잠금이나 회전 중 에러는 무시하고 다음 이벤트에서 이어간다
+        // 2026-11-10: "활성 탭인데 아무것도 안 뜬다"를 구분하려고 — 감시가 죽은 건지,
+        // 정말 번역할 레코드가 없었던 건지 상태 줄로 보여준다.
+        controller.panel.setStatus(
+          `마지막 확인 ${now} (레코드 ${records.length}개, 번역 대상 ${translatable.length}개)`
+        );
+      } catch (e) {
+        // 일시적인 파일 잠금 같은 흔한 에러도 일단 보이게 한다 — 조용히 삼키면
+        // 진짜 버그인지 "할 게 없어서 조용한 것"인지 구분이 안 된다.
+        controller.panel.setStatus(`${now} 처리 중 오류: ${String(e)}`);
       }
     }
 
@@ -226,7 +265,7 @@ export function activate(context: vscode.ExtensionContext): void {
     webviewPanel.onDidDispose(() => {
       controller.watcher?.close();
       sessions.delete(file);
-      closedByUser.set(file, controller.title);
+      closedByUser.set(file, { title: controller.title, titleFromTab: controller.titleFromTab });
       updateStatus();
     });
 
@@ -246,8 +285,31 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  reconcileSessions();
-  const rescanTimer = setInterval(reconcileSessions, RESCAN_INTERVAL_MS);
+  // "클로드 탭이 꺼지면 번역창도 지워달라" 요청 — 제목에서 뽑은 탭 라벨이 더 이상 열린 Claude Code
+  // 탭 목록에 없으면 그 번역창을 닫는다(onDidDispose가 알아서 뒷정리를 한다).
+  function closeSessionsForClosedClaudeTabs(): void {
+    const openLabels = openClaudeCodeTabLabels();
+    for (const controller of sessions.values()) {
+      // 대체 제목(titleFromTab === false)은 어떤 탭과도 매칭할 근거가 없다 — 건드리지 않는다.
+      if (!controller.titleFromTab) continue;
+      const match = /^사고 번역 — (.+)$/.exec(controller.title);
+      const label = match?.[1];
+      if (label && !openLabels.has(label)) {
+        controller.webviewPanel.dispose();
+      }
+    }
+  }
+
+  function tick(): void {
+    reconcileSessions();
+    closeSessionsForClosedClaudeTabs();
+  }
+
+  tick();
+  const rescanTimer = setInterval(tick, RESCAN_INTERVAL_MS);
+  // 탭이 바뀌는 즉시 반응해 타이머(최대 RESCAN_INTERVAL_MS 지연)보다 빠르게 새 세션을 띄운다.
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabGroups(tick));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(tick));
 
   context.subscriptions.push({
     dispose: () => {

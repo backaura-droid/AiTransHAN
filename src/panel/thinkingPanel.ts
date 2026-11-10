@@ -13,6 +13,7 @@ const MAX_ENTRIES = 200;
 export class ThinkingPanel {
   private standalonePanel: vscode.WebviewPanel | undefined;
   private entries: string[] = [];
+  private status = '';
 
   attachStandalonePanel(panel: vscode.WebviewPanel): void {
     this.standalonePanel = panel;
@@ -49,6 +50,13 @@ export class ThinkingPanel {
     this.render();
   }
 
+  // 2026-11-10: 감시가 죽어서 아무것도 안 뜨는 건지, 정말 번역할 게 없어서 안 뜨는 건지
+  // 구분할 수 있도록 — 항목 유무와 무관하게 항상 보이는 상태 줄.
+  setStatus(text: string): void {
+    this.status = text;
+    this.render();
+  }
+
   private trim(): void {
     if (this.entries.length > MAX_ENTRIES) {
       this.entries.splice(0, this.entries.length - MAX_ENTRIES);
@@ -67,15 +75,17 @@ export class ThinkingPanel {
         .ko.error, .entry.error { color: var(--vscode-errorForeground); }
         .entry.error { display: block; padding: 8px 10px; }
         .empty { padding: 12px 10px; color: var(--vscode-descriptionForeground); }
+        .status { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
       </style>
     `;
     const header = `<div class="header"><span>원문 (Thinking)</span><span>한글 번역</span></div>`;
+    const statusLine = this.status ? `<div class="status">${escapeHtml(this.status)}</div>` : '';
     const body =
       this.entries.length > 0
         ? this.entries.join('')
         : '<div class="empty">대기 중 — Claude Code의 새로운 영문 사고(thinking) 블록이 감지되면 자동으로 번역됩니다.</div>';
     const autoScroll = `<script>window.scrollTo(0, document.body.scrollHeight);</script>`;
-    return `<body>${style}${header}${body}${autoScroll}</body>`;
+    return `<body>${style}${header}${statusLine}${body}${autoScroll}</body>`;
   }
 
   private render(): void {

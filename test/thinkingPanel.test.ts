@@ -55,6 +55,18 @@ test('번역 에러 기록 시 원문이 함께 주어지면 원문도 보존해
   assert.ok(view.webview.html.includes('타임아웃 오류'));
 });
 
+// 2026-11-10: "활성 탭이 있는데 아무것도 안 뜬다"를 구분하려고 — 감시가 죽었는지(상태 줄이 안 바뀜)
+// 아니면 정말 번역할 게 없었는지(상태 줄은 갱신되는데 항목만 없음) 눈으로 볼 수 있어야 한다.
+test('setStatus()로 남긴 상태 줄이 항목 유무와 무관하게 계속 보인다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeStandalonePanel();
+  panel.attachStandalonePanel(view as any);
+  panel.setStatus('마지막 확인 09:12:00 (레코드 3개, 번역 대상 0개)');
+  assert.ok(view.webview.html.includes('마지막 확인 09:12:00'));
+  panel.appendEntry('original', 'translated');
+  assert.ok(view.webview.html.includes('마지막 확인 09:12:00'), '항목이 생겨도 상태 줄은 남아있어야 한다');
+});
+
 test('clear()를 호출하면 쌓인 항목이 전부 지워지고 대기 중 문구로 돌아간다', () => {
   const panel = new ThinkingPanel();
   const view = fakeStandalonePanel();
