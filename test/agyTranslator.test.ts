@@ -36,18 +36,31 @@ function echoSpawn(capturedArgs: string[][]): SpawnFn {
   };
 }
 
-test('에이전트 프로필 파일을 한 번만 만든다', () => {
+test('에이전트 프로필 파일을 만들고, 프롬프트를 바꾸면 항상 최신으로 덮어쓴다', () => {
+  // 2026-11-10: "한 번만 쓰기"였다가 바꿨다 — 전에 떠 있던 확장이 이미 구버전 프로필 파일을
+  // 만들어뒀으면, 소스에서 프롬프트(말투 지침 등)를 고쳐도 영원히 옛날 파일이 남아 반영이 안 됐다.
+  const dir = tmpDir();
+  const agentPath = path.join(dir, '.agents', 'agents', 'translator.md');
+  fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+  fs.writeFileSync(agentPath, 'OLD-STALE-CONTENT', 'utf8');
+
+  ensureTranslatorAgent(dir);
+
+  const content = fs.readFileSync(agentPath, 'utf8');
+  assert.ok(!content.includes('OLD-STALE-CONTENT'), '옛 파일을 항상 최신 내용으로 덮어써야 한다');
+  assert.ok(content.includes('tools: []'));
+  assert.ok(content.includes('inheritMcp: false'));
+  assert.ok(content.includes('excludeDefaultComponents: true'));
+});
+
+// 2026-11-10: "번역 말투가 반말/존댓말 왔다갔다 한다"는 요청 — 헤르메스 에이전트 캐릭터 "윤주"의
+// 말투 기준(항상 존댓말, 일관된 격식)을 번역 프롬프트에 명시해 등록마다 말투가 들쭉날쭉하지 않게 한다.
+test('번역 프롬프트에 일관된 존댓말(윤주 말투) 지침이 포함된다', () => {
   const dir = tmpDir();
   ensureTranslatorAgent(dir);
-  const agentPath = path.join(dir, '.agents', 'agents', 'translator.md');
-  const first = fs.readFileSync(agentPath, 'utf8');
-  assert.ok(first.includes('tools: []'));
-  assert.ok(first.includes('inheritMcp: false'));
-  assert.ok(first.includes('excludeDefaultComponents: true'));
-
-  fs.writeFileSync(agentPath, 'CUSTOM-UNCHANGED', 'utf8');
-  ensureTranslatorAgent(dir); // 이미 있으면 덮어쓰지 않는다
-  assert.equal(fs.readFileSync(agentPath, 'utf8'), 'CUSTOM-UNCHANGED');
+  const content = fs.readFileSync(path.join(dir, '.agents', 'agents', 'translator.md'), 'utf8');
+  assert.ok(content.includes('존댓말'));
+  assert.ok(content.includes('윤주'));
 });
 
 test('본문은 stdin으로 전달되고, agy 호출 인자에는 원문이 직접 노출되지 않는다', async () => {
