@@ -118,25 +118,61 @@ test('ai-title이 여러 번 바뀐 파일은 가장 최근(마지막) 제목으
   const other = path.join(dir, 'other.jsonl');
   writeSession(other, '/my/workspace', ['옛 제목과 안 겹치는 다른 탭']);
   fs.utimesSync(file, new Date(Date.now() - 10000), new Date(Date.now() - 10000));
+  // 2026-11-10 정정: 제목이 붙은 "다른" 세션(other)은 더 이상 폴백 후보가 아니다(아래 새 테스트 참조).
+  // other는 제목이 있으니 제외되고, 제목 없는 파일도 없으므로 null이어야 한다.
   assert.equal(
     findActiveSessionFile(root, '/my/workspace', '첫 메시지 원문 그대로'),
-    other,
-    '옛 제목은 더 이상 어느 파일과도 안 맞으므로 mtime 폴백(other)으로 가야 한다'
+    null,
+    '제목이 붙은 다른 탭의 세션으로 잘못 폴백하면 안 된다'
   );
 });
 
-test('활성 탭 라벨과 일치하는 ai-title이 없으면(새 대화 등) 기존처럼 최신 mtime 파일로 되돌아간다', () => {
+// 2026-11-10 실사용 버그: 빈 새 탭(아직 메시지 안 보냄 → 세션 파일 자체가 없음)을 열었는데, 그 순간
+// 가장 바쁜(mtime 최신) "다른, 제목 있는" 세션이 엉뚱하게 잡혀 그 내용이 그대로 보이는 사고가 났다.
+// council(argon) + Opus 교차검증 결론: "제목이 이미 있는 파일은 폴백 후보에서 아예 제외"하고,
+// "제목이 아직 없는(진짜 새) 파일만, 그것도 최근(60초 이내) 생성/수정된 것만" 폴백으로 허용한다.
+test('제목이 붙은 다른 탭의 세션은 아무리 최신이어도 폴백 후보가 되지 않는다(빈 새 탭 버그)', () => {
   const root = makeFixture();
   const dir = path.join(root, 'ws1');
   fs.mkdirSync(dir);
-  const newer = path.join(dir, 'newer.jsonl');
-  const older = path.join(dir, 'older.jsonl');
-  fs.writeFileSync(older, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
-  fs.writeFileSync(newer, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
-  const now = Date.now();
-  fs.utimesSync(older, new Date(now - 10000), new Date(now - 10000));
-  fs.utimesSync(newer, new Date(now), new Date(now));
-  assert.equal(findActiveSessionFile(root, '/my/workspace', '어떤 파일에도 없는 제목'), newer);
+  const busyOtherTab = path.join(dir, 'busy.jsonl'); // 지금 활발히 쓰이는 "다른" 탭 — 제목 있음, mtime 최신
+  writeSession(busyOtherTab, '/my/workspace', ['이 확장을 만들고 있는 바로 그 세션']);
+  assert.equal(
+    findActiveSessionFile(root, '/my/workspace', 'Claude Code'), // 방금 연 빈 탭의 기본 라벨
+    null,
+    '제목 있는 다른 세션을 빈 탭의 내용인 것처럼 보여주면 안 된다'
+  );
+});
+
+test('제목이 아직 없는 "진짜 새" 세션은 최근(60초 이내)이면 폴백으로 허용한다(첫 턴 누락 방지)', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const brandNew = path.join(dir, 'brand-new.jsonl'); // 방금 첫 메시지를 보냈지만 아직 제목이 안 지어짐
+  fs.writeFileSync(brandNew, JSON.stringify({ cwd: '/my/workspace', type: 'user' }) + '\n');
+  assert.equal(findActiveSessionFile(root, '/my/workspace', 'Claude Code'), brandNew);
+});
+
+test('제목 없는 세션이라도 60초보다 오래됐으면(옛날에 중단된 파일) 폴백으로 쓰지 않는다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const stale = path.join(dir, 'stale.jsonl');
+  fs.writeFileSync(stale, JSON.stringify({ cwd: '/my/workspace', type: 'user' }) + '\n');
+  const old = new Date(Date.now() - 5 * 60 * 1000);
+  fs.utimesSync(stale, old, old);
+  assert.equal(findActiveSessionFile(root, '/my/workspace', 'Claude Code'), null);
+});
+
+// 2026-11-10: 활성 Claude Code 탭이 아예 없을 때(코드 편집기 탭 등에 포커스)는 null을 명시적으로
+// 넘긴다 — 이때도 엉뚱한 파일로 폴백하면 안 된다(undefined와 다르게 취급해야 함, 아래 테스트 참조).
+test('activeTabLabel이 명시적으로 null이면(활성 Claude 탭 없음) 아무리 cwd가 맞아도 null을 돌려준다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'a.jsonl');
+  writeSession(file, '/my/workspace', ['제목']);
+  assert.equal(findActiveSessionFile(root, '/my/workspace', null), null);
 });
 
 test('activeTabLabel을 안 넘기면(undefined) 기존 동작과 같다', () => {

@@ -201,29 +201,48 @@ function findLatestAiTitle(filePath: string): string | null {
   }
 }
 
+// 2026-11-10 실사용 버그 수정(council argon + Opus 교차검증): "빈 새 탭을 열었더니 지금 가장 바쁜
+// (mtime 최신) 다른 탭의 내용이 그대로 보인다"는 사고가 났다. 원인은 ai-title 매칭에 실패하면
+// 무조건 mtime 최신 파일로 폴백했던 것 — 그 파일이 이미 다른 탭의 ai-title을 갖고 있어도 상관없이
+// 집어왔다. 고친 규칙: ①이미 다른 ai-title이 박힌 파일은 폴백 후보에서 원천 제외(그 파일은 이미
+// 주인이 있다) ②아직 ai-title이 없는(진짜 새 대화일 수 있는) 파일만, 그것도 최근에 생성/수정된
+// 것만 폴백으로 허용(옛날에 중단된 제목 없는 파일이 잘못 잡히는 것도 방지).
+const UNTITLED_FALLBACK_MAX_AGE_MS = 60_000;
+
 export function findActiveSessionFile(
   projectsRoot: string,
   workspaceCwd: string,
   activeTabLabel?: string | null
 ): string | null {
-  const matches: string[] = [];
+  const matches: SessionFileInfo[] = [];
   for (const candidate of listJsonlCandidates(projectsRoot)) {
     const cwd = findCwdInHead(candidate.file);
     if (cwd !== null && sameCwd(cwd, workspaceCwd)) {
-      matches.push(candidate.file);
+      matches.push(candidate);
     }
   }
   if (matches.length === 0) return null;
 
-  if (activeTabLabel) {
-    for (const file of matches) {
-      if (findLatestAiTitle(file) === activeTabLabel) {
-        return file;
-      }
-    }
+  // 호출자가 "지금 활성 Claude Code 탭이 없다"고 명시적으로 확인한 경우(null) — 엉뚱한 파일을
+  // 보여주지 않는다. undefined(탭 라벨 정보 자체가 없는 호출)와는 다르게 취급한다.
+  if (activeTabLabel === null) return null;
+  if (activeTabLabel === undefined) {
+    // 레거시 호출(라벨을 아예 안 넘김) — 기존처럼 최신 mtime으로 폴백.
+    return matches[0].file;
   }
 
-  // ai-title 매칭 실패(새 대화라 아직 제목이 없는 경우 등) 시 기존 방식(최신 mtime)으로 되돌아간다.
-  return matches[0];
+  let untitledFallback: string | null = null;
+  for (const candidate of matches) {
+    const title = findLatestAiTitle(candidate.file);
+    if (title !== null) {
+      if (title === activeTabLabel) return candidate.file;
+      continue; // 이미 다른 탭의 제목이 박힌 파일 — 폴백 후보에서 제외
+    }
+    // matches는 mtime 내림차순이므로 여기서 처음 만나는 "제목 없음" 파일이 가장 최근 것이다.
+    if (untitledFallback === null && Date.now() - candidate.mtimeMs < UNTITLED_FALLBACK_MAX_AGE_MS) {
+      untitledFallback = candidate.file;
+    }
+  }
+  return untitledFallback;
 }
 
