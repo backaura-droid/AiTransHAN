@@ -1,4 +1,4 @@
-// 설정값(auto/agy/geminiApiKey)과 agy 설치 여부로부터 실제 쓸 번역 공급자를 고르는 순수 로직,
+// 설정값(auto/agy/apiKey)과 agy 설치 여부로부터 실제 쓸 번역 공급자를 고르는 순수 로직,
 // 그리고 "agy가 PATH에 있는지"를 실제 agy 없이 가짜 프로세스로 검증한다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,14 +11,14 @@ test('설정이 agy면 agy available 값과 무관하게 항상 agy를 쓴다', 
   assert.equal(pickProvider('agy', false), 'agy');
 });
 
-test('설정이 geminiApiKey면 agy available 값과 무관하게 항상 API 키 방식을 쓴다', () => {
-  assert.equal(pickProvider('geminiApiKey', true), 'geminiApiKey');
-  assert.equal(pickProvider('geminiApiKey', false), 'geminiApiKey');
+test('설정이 apiKey면 agy available 값과 무관하게 항상 API 키 방식을 쓴다', () => {
+  assert.equal(pickProvider('apiKey', true), 'apiKey');
+  assert.equal(pickProvider('apiKey', false), 'apiKey');
 });
 
 test('설정이 auto면 agy 설치 여부를 따른다', () => {
   assert.equal(pickProvider('auto', true), 'agy');
-  assert.equal(pickProvider('auto', false), 'geminiApiKey');
+  assert.equal(pickProvider('auto', false), 'apiKey');
 });
 
 test('probeAgyAvailable: 정상 종료(exit 0)면 true', async () => {

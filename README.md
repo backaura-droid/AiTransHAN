@@ -26,29 +26,37 @@ code --install-extension claude-thinking-ko-*.vsix
 
 ## 번역 백엔드 설정
 
-번역은 두 가지 방식 중 하나로 동작합니다. 설정 `claudeThinkingKo.provider`로 고를 수 있고, 기본값은 `auto`입니다.
+번역은 세 가지 방식 중 하나로 동작합니다. 설정 `claudeThinkingKo.provider`로 고를 수 있고, 기본값은 `auto`입니다.
 
 | 값 | 동작 |
 |---|---|
-| `auto` (기본) | `agy`(Gemini CLI, 구독) CLI가 PATH에 있으면 그걸 쓰고, 없으면 Gemini API 키 입력을 안내합니다 |
+| `auto` (기본) | `agy`(Gemini CLI, 구독) CLI가 PATH에 있으면 그걸 쓰고, 없으면 API 키 입력을 안내합니다 |
 | `agy` | `agy` CLI만 사용합니다 |
-| `geminiApiKey` | Gemini API 키만 사용합니다 |
+| `apiKey` | API 키 방식만 사용합니다(아래 참고) |
 
-대부분의 사용자는 `agy`가 없으므로, 처음 켜면 아래와 같은 흐름으로 Gemini API 키를 안내합니다.
+대부분의 사용자는 `agy`가 없으므로, 처음 켜면 아래와 같은 흐름으로 API 키를 안내합니다.
 
 1. 확장이 켜질 때 agy가 없고 저장된 키도 없으면, 알림 토스트로 한 번만 안내합니다("API 키 입력" / "나중에").
-2. "API 키 입력"을 누르면 입력창(가려짐)이 뜨고, 붙여넣으면 VSCode의 `SecretStorage`에 안전하게 저장됩니다(설정 파일에 평문으로 남지 않습니다).
-3. 나중에 바꾸거나 처음 입력을 건너뛰었다면, 패널 상단의 **열쇠 아이콘**(또는 명령 팔레트에서 "Claude 사고 번역: Gemini API 키 설정")을 언제든 실행할 수 있습니다.
+2. "API 키 입력"을 누르면 입력창(가려짐)이 뜨고, 아래 셋 중 하나의 키를 붙여넣으면 접두사로 **자동 인식**합니다.
 
-**키 발급(무료)**: [Google AI Studio](https://aistudio.google.com/apikey)에 Google 계정으로 로그인 → "Create API key" → 생성된 키를 복사해 붙여넣으면 됩니다.
+   | 서비스 | 키 발급(무료) | 비고 |
+   |---|---|---|
+   | Gemini | [Google AI Studio](https://aistudio.google.com/apikey) | `AIza`로 시작 |
+   | Groq | [console.groq.com/keys](https://console.groq.com/keys) | `gsk_`로 시작, 응답 속도 빠름 |
+   | OpenRouter | [openrouter.ai/keys](https://openrouter.ai/keys) | `sk-or-v1-`로 시작, `:free` 모델 다수 |
 
-> 이 확장은 Google 계정의 아이디·비밀번호를 받지 않습니다. API 키만 받아 로컬에 안전하게 저장하며, 번역 요청 외의 용도로 쓰지 않습니다.
+3. 위 셋이 아니거나(OpenCode, LLM7 등) 직접 운영하는 게이트웨이가 있다면, 선택 화면에서 **"직접 입력(커스텀)"**을 고르면 됩니다 — OpenAI 호환 `/chat/completions`를 제공하는 base URL과 모델 이름만 넣으면 그대로 동작합니다.
+4. 나중에 바꾸거나 처음 입력을 건너뛰었다면, 패널 상단의 **열쇠 아이콘**(또는 명령 팔레트에서 "Claude 사고 번역: API 키 설정")을 언제든 실행할 수 있습니다.
+
+키는 VSCode의 `SecretStorage`에 안전하게 저장됩니다(설정 파일에 평문으로 남지 않습니다).
+
+> 이 확장은 계정 아이디·비밀번호를 받지 않습니다. API 키만 받아 로컬에 안전하게 저장하며, 번역 요청 외의 용도로 쓰지 않습니다.
 
 ## 패널 사용법
 
 - **⏸ 전체 일시정지/재개**: 번역을 잠시 멈춥니다(재개 시 멈춰있던 동안의 내용은 건너뜁니다).
 - **🗑 전체 지우기**: 지금 보고 있는 탭의 번역 내역을 지웁니다.
-- **🔑 Gemini API 키 설정**: 키를 처음 넣거나 바꿀 때.
+- **🔑 API 키 설정**: 키를 처음 넣거나 바꿀 때.
 
 ## 한계
 

@@ -20,9 +20,14 @@ import { TranslationQueue } from './translationQueue';
 import { writeAndRunAgy } from './agyTranslator';
 import { SessionWatcherPool } from './sessionWatcherPool';
 import { pickProvider, probeAgyAvailable, type ProviderSetting } from './providerResolver';
-import { translateWithGeminiApi } from './geminiApiTranslator';
+import { translateViaOpenAiCompat } from './openAiCompatTranslator';
+import { API_PROVIDER_PRESETS, detectProvider } from './apiProviderPresets';
 
-const GEMINI_API_KEY_SECRET = 'claudeThinkingKo.geminiApiKey';
+const API_KEY_SECRET = 'claudeThinkingKo.apiKey';
+// 'gemini' | 'groq' | 'openrouter' | 'custom' — API_PROVIDER_PRESETS의 id 중 하나, 또는 'custom'
+const ACTIVE_PROVIDER_STATE = 'claudeThinkingKo.activeApiProvider';
+const CUSTOM_BASE_URL_STATE = 'claudeThinkingKo.customBaseUrl';
+const CUSTOM_MODEL_STATE = 'claudeThinkingKo.customModel';
 const HAS_PROMPTED_KEY = 'claudeThinkingKo.hasPromptedApiKey';
 
 // 세션 파일 유무를 훑는 것뿐이라(번역 CLI 호출이 아님) 짧게 잡아도 "초마다 번역 호출 금지"
@@ -62,21 +67,59 @@ function findActiveClaudeCodeTabLabel(): string | null {
   return null;
 }
 
-// 배포 후 agy(개발자 본인의 구독 CLI)가 없는 사용자를 위한 대체 경로 — Gemini API 키 입력을 받아
-// VSCode SecretStorage(설정 파일 평문 노출 없음)에 저장한다. 패널 상단 열쇠 아이콘과 명령
-// 팔레트 양쪽에서 같은 명령을 쓴다.
+// 배포 후 agy(개발자 본인의 구독 CLI)가 없는 사용자를 위한 대체 경로 — API 키 입력을 받는다.
+// Gemini·Groq·OpenRouter는 키 접두사로 자동 인식하고, 그 외(OpenCode·LLM7·자체 게이트웨이 등
+// OpenAI 호환 엔드포인트라면 뭐든)는 "직접 입력"으로 base URL·모델을 받는다. 키는 VSCode
+// SecretStorage(설정 파일 평문 노출 없음)에 저장한다. 패널 상단 열쇠 아이콘과 명령 팔레트
+// 양쪽에서 같은 명령을 쓴다.
 async function promptAndStoreApiKey(context: vscode.ExtensionContext): Promise<void> {
   const input = await vscode.window.showInputBox({
     password: true,
     ignoreFocusOut: true,
-    title: 'Gemini API 키 설정',
-    prompt: 'Google AI Studio(https://aistudio.google.com/apikey)에서 무료로 발급받은 키를 붙여넣으세요',
-    placeHolder: 'AIzaSy...'
+    title: 'API 키 설정',
+    prompt: 'Gemini·Groq·OpenRouter 키를 붙여넣으면 자동으로 인식합니다. 다른 서비스는 다음 화면에서 "직접 입력"을 고르세요.',
+    placeHolder: 'AIzaSy... / gsk_... / sk-or-v1-...'
   });
-  if (input) {
-    await context.secrets.store(GEMINI_API_KEY_SECRET, input);
-    vscode.window.showInformationMessage('Claude 사고 번역: Gemini API 키를 저장했습니다.');
+  if (!input) return;
+
+  const detected = detectProvider(input);
+  const CUSTOM_ID = 'custom';
+  const items: Array<vscode.QuickPickItem & { id: string }> = [
+    ...API_PROVIDER_PRESETS.map((preset) => ({
+      id: preset.id,
+      label: preset.id === detected?.id ? `$(check) ${preset.label} (자동 인식됨)` : preset.label
+    })),
+    { id: CUSTOM_ID, label: '직접 입력(커스텀)', description: 'OpenAI 호환 엔드포인트 — OpenCode, LLM7, 자체 게이트웨이 등' }
+  ];
+  const picked = await vscode.window.showQuickPick(items, {
+    title: '어느 서비스의 키인가요?',
+    ignoreFocusOut: true
+  });
+  if (!picked) return;
+
+  if (picked.id === CUSTOM_ID) {
+    const baseUrl = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: '엔드포인트 base URL',
+      prompt: 'OpenAI 호환 /chat/completions를 제공하는 base URL',
+      placeHolder: 'https://api.example.com/v1'
+    });
+    if (!baseUrl) return;
+    const model = await vscode.window.showInputBox({
+      ignoreFocusOut: true,
+      title: '모델 이름',
+      prompt: '그 엔드포인트에서 쓸 모델 id',
+      placeHolder: 'model-id'
+    });
+    if (!model) return;
+    await context.globalState.update(CUSTOM_BASE_URL_STATE, baseUrl);
+    await context.globalState.update(CUSTOM_MODEL_STATE, model);
   }
+
+  await context.secrets.store(API_KEY_SECRET, input);
+  await context.globalState.update(ACTIVE_PROVIDER_STATE, picked.id);
+  const label = picked.id === CUSTOM_ID ? '커스텀' : API_PROVIDER_PRESETS.find((p) => p.id === picked.id)?.label;
+  vscode.window.showInformationMessage(`Claude 사고 번역: ${label} API 키를 저장했습니다.`);
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -85,7 +128,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // 워크스페이스 유무와 무관하게 항상 등록 — 아래 early return보다 먼저 와야 한다.
   context.subscriptions.push(
-    vscode.commands.registerCommand('claudeThinkingKo.setGeminiApiKey', () => promptAndStoreApiKey(context))
+    vscode.commands.registerCommand('claudeThinkingKo.setApiKey', () => promptAndStoreApiKey(context))
   );
 
   const workspaceCwdMaybe = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -105,7 +148,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const setting = vscode.workspace
       .getConfiguration('claudeThinkingKo')
       .get<ProviderSetting>('provider', 'auto');
-    if (setting !== 'geminiApiKey') {
+    if (setting !== 'apiKey') {
       if (cachedAgyAvailable === undefined) {
         cachedAgyAvailable = setting === 'agy' ? true : await probeAgyAvailable();
       }
@@ -113,11 +156,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
       }
     }
-    const apiKey = await context.secrets.get(GEMINI_API_KEY_SECRET);
-    if (!apiKey) {
-      throw new Error('Gemini API 키가 설정되지 않음 — 패널 상단 열쇠 아이콘에서 설정하세요');
+    const apiKey = await context.secrets.get(API_KEY_SECRET);
+    const providerId = context.globalState.get<string>(ACTIVE_PROVIDER_STATE);
+    if (!apiKey || !providerId) {
+      throw new Error('API 키가 설정되지 않음 — 패널 상단 열쇠 아이콘에서 설정하세요');
     }
-    return translateWithGeminiApi(text, { apiKey });
+    let baseUrl: string;
+    let model: string;
+    if (providerId === 'custom') {
+      baseUrl = context.globalState.get<string>(CUSTOM_BASE_URL_STATE) ?? '';
+      model = context.globalState.get<string>(CUSTOM_MODEL_STATE) ?? '';
+      if (!baseUrl || !model) {
+        throw new Error('커스텀 엔드포인트 설정이 올바르지 않음 — 열쇠 아이콘에서 다시 설정하세요');
+      }
+    } else {
+      const preset = API_PROVIDER_PRESETS.find((p) => p.id === providerId);
+      if (!preset) {
+        throw new Error('알 수 없는 제공자 설정 — 열쇠 아이콘에서 다시 설정하세요');
+      }
+      baseUrl = preset.baseUrl;
+      model = preset.defaultModel;
+    }
+    return translateViaOpenAiCompat(text, { baseUrl, model, apiKey });
   };
 
   // 설치 후 agy도 없고 키도 없는 사용자에게 딱 한 번만 안내한다(매번 다시 물어보지 않음 — 나중에
@@ -126,11 +186,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const setting = vscode.workspace.getConfiguration('claudeThinkingKo').get<ProviderSetting>('provider', 'auto');
     if (setting === 'agy') return;
     if (setting === 'auto' && (await probeAgyAvailable())) return;
-    if (await context.secrets.get(GEMINI_API_KEY_SECRET)) return;
+    if (await context.secrets.get(API_KEY_SECRET)) return;
     if (context.globalState.get(HAS_PROMPTED_KEY)) return;
     await context.globalState.update(HAS_PROMPTED_KEY, true);
     const choice = await vscode.window.showInformationMessage(
-      'Claude 사고 번역: 번역에 쓸 Gemini API 키가 필요해요(무료, Google AI Studio에서 발급).',
+      'Claude 사고 번역: 번역에 쓸 API 키가 필요해요(Gemini·Groq·OpenRouter 중 하나, 전부 무료 발급).',
       'API 키 입력',
       '나중에'
     );

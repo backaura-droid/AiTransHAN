@@ -3,13 +3,13 @@
 import { spawn } from 'node:child_process';
 import type { SpawnFn } from './agyTranslator';
 
-export type ProviderSetting = 'auto' | 'agy' | 'geminiApiKey';
-export type Provider = 'agy' | 'geminiApiKey';
+export type ProviderSetting = 'auto' | 'agy' | 'apiKey';
+export type Provider = 'agy' | 'apiKey';
 
 export function pickProvider(setting: ProviderSetting, agyAvailable: boolean): Provider {
   if (setting === 'agy') return 'agy';
-  if (setting === 'geminiApiKey') return 'geminiApiKey';
-  return agyAvailable ? 'agy' : 'geminiApiKey';
+  if (setting === 'apiKey') return 'apiKey';
+  return agyAvailable ? 'agy' : 'apiKey';
 }
 
 const PROBE_TIMEOUT_MS = 5000;

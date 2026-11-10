@@ -3,7 +3,7 @@
   "publisher": "local",
   "displayName": "Claude 사고 한글 보기",
   "description": "Claude Code 세션의 사고(thinking) 블록을 한국어로 번역해 보여주는 패널",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -44,8 +44,8 @@
         "icon": "$(clear-all)"
       },
       {
-        "command": "claudeThinkingKo.setGeminiApiKey",
-        "title": "Claude 사고 번역: Gemini API 키 설정",
+        "command": "claudeThinkingKo.setApiKey",
+        "title": "Claude 사고 번역: API 키 설정",
         "icon": "$(key)"
       }
     ],
@@ -62,7 +62,7 @@
           "group": "navigation@2"
         },
         {
-          "command": "claudeThinkingKo.setGeminiApiKey",
+          "command": "claudeThinkingKo.setApiKey",
           "when": "view == claudeThinkingKo.panel",
           "group": "navigation@3"
         }
@@ -73,11 +73,11 @@
       "properties": {
         "claudeThinkingKo.provider": {
           "type": "string",
-          "enum": ["auto", "agy", "geminiApiKey"],
+          "enum": ["auto", "agy", "apiKey"],
           "enumDescriptions": [
-            "agy(Gemini CLI, 구독)가 설치돼 있으면 그걸 쓰고, 없으면 Gemini API 키 입력을 안내합니다",
+            "agy(Gemini CLI, 구독)가 설치돼 있으면 그걸 쓰고, 없으면 API 키 입력을 안내합니다",
             "agy(Gemini CLI, 구독)만 사용합니다",
-            "Gemini API 키만 사용합니다(Google AI Studio에서 무료 발급)"
+            "API 키 방식만 사용합니다(Gemini/Groq/OpenRouter 자동 인식 또는 직접 입력)"
           ],
           "default": "auto",
           "description": "번역에 쓸 방식"
