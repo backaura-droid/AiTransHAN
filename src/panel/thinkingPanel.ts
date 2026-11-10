@@ -71,19 +71,25 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
   }
 
   private buildHtml(): string {
+    // 2026-11-10: 헤더·"지금 보는 중"·상태 줄은 스크롤에도 위에 고정되게, body를 세로
+    // flex로 나눠 고정 영역과 스크롤 영역(#entries)을 분리한다. 자동 스크롤은 document가
+    // 아니라 #entries 요소 자체를 내려야 한다.
     const style = `
       <style>
-        body { font-family: var(--vscode-font-family); font-size: 12px; margin: 0; padding: 0; color: var(--vscode-foreground); }
+        html, body { height: 100%; }
+        body { font-family: var(--vscode-font-family); font-size: 12px; margin: 0; padding: 0; color: var(--vscode-foreground); display: flex; flex-direction: column; overflow: hidden; }
+        .fixed-top { flex: 0 0 auto; }
         .header { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: var(--vscode-sideBarSectionHeader-background); border-bottom: 1px solid var(--vscode-panel-border); font-weight: 600; font-size: 11px; }
         .header span { flex: 1 1 50%; }
         .following { padding: 4px 8px; font-size: 10px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .status { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+        #entries { flex: 1 1 auto; overflow-y: auto; }
         .entry { display: flex; border-bottom: 1px solid var(--vscode-panel-border); }
         .entry > div { flex: 1 1 50%; padding: 8px 10px; box-sizing: border-box; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
         .en { color: var(--vscode-descriptionForeground); border-right: 1px solid var(--vscode-panel-border); }
         .ko.error, .entry.error { color: var(--vscode-errorForeground); }
         .entry.error { display: block; padding: 8px 10px; }
         .empty { padding: 12px 10px; color: var(--vscode-descriptionForeground); }
-        .status { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
       </style>
     `;
     const header = `<div class="header"><span>원문 (Thinking)</span><span>한글 번역</span></div>`;
@@ -93,8 +99,11 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
       this.entries.length > 0
         ? this.entries.join('')
         : '<div class="empty">대기 중 — Claude Code의 새로운 영문 사고(thinking) 블록이 감지되면 자동으로 번역됩니다.</div>';
-    const autoScroll = `<script>window.scrollTo(0, document.body.scrollHeight);</script>`;
-    return `<body>${style}${header}${followingLine}${statusLine}${body}${autoScroll}</body>`;
+    const autoScroll = `<script>
+      const el = document.getElementById('entries');
+      if (el) { el.scrollTo(0, el.scrollHeight); }
+    </script>`;
+    return `<body>${style}<div class="fixed-top">${header}${followingLine}${statusLine}</div><div id="entries">${body}</div>${autoScroll}</body>`;
   }
 
   private render(): void {
