@@ -53,14 +53,15 @@ test('에이전트 프로필 파일을 만들고, 프롬프트를 바꾸면 항�
   assert.ok(content.includes('excludeDefaultComponents: true'));
 });
 
-// 2026-11-10: "번역 말투가 반말/존댓말 왔다갔다 한다"는 요청 — 헤르메스 에이전트 캐릭터 "윤주"의
-// 말투 기준(항상 존댓말, 일관된 격식)을 번역 프롬프트에 명시해 등록마다 말투가 들쭉날쭉하지 않게 한다.
-test('번역 프롬프트에 일관된 존댓말(윤주 말투) 지침이 포함된다', () => {
+// 2026-11-10: 애교체가 핵심 파악을 방해한다는 피드백으로 "정중·간결·핵심 누락 없이"로 교체했다.
+test('번역 프롬프트에 존댓말·간결 지침이 포함되고 애교체 지침은 없다', () => {
   const dir = tmpDir();
   ensureTranslatorAgent(dir);
   const content = fs.readFileSync(path.join(dir, '.agents', 'agents', 'translator.md'), 'utf8');
   assert.ok(content.includes('존댓말'));
-  assert.ok(content.includes('윤주'));
+  assert.ok(content.includes('간결'));
+  assert.ok(!content.includes('애교체를'), '애교체를 쓰라는 지침이 남아있으면 안 된다');
+  assert.ok(!content.includes('윤주'));
 });
 
 test('본문은 stdin으로 전달되고, agy 호출 인자에는 원문이 직접 노출되지 않는다', async () => {
