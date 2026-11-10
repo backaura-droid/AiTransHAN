@@ -2,7 +2,7 @@
 // 대상 탭이 바뀌면 이전 항목을 비우는지(다른 대화 내용과 안 섞이게) 검증
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ThinkingPanel } from '../src/panel/thinkingPanel';
+import { ThinkingPanel, buildEntryHtml, buildErrorHtml } from '../src/panel/thinkingPanel';
 
 function fakeView() {
   return { webview: { options: undefined as unknown, html: '' } };
@@ -99,4 +99,48 @@ test('setFollowing(null)이면 대상 없음 문구를 보여준다', () => {
   panel.resolveWebviewView(view as any);
   panel.setFollowing(null);
   assert.ok(view.webview.html.includes('활성 Claude Code 탭 없음'));
+});
+
+// 2026-11-10: 탭 A→B→A로 돌아오면 A에서 보여줬던 내역을 되살린다(extension.ts가 세션별 캐시를 넘김).
+test('restoreEntries()는 기존 항목을 주어진 내역으로 교체하고 자동 스크롤과 함께 다시 그린다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendEntry('B original', 'B translated');
+  panel.restoreEntries([buildEntryHtml('A original', 'A translated'), buildErrorHtml('A 오류', 'A 원문')]);
+  const html = view.webview.html;
+  assert.ok(!html.includes('B translated'), '이전 탭 항목은 사라져야 한다');
+  assert.ok(html.indexOf('A translated') < html.indexOf('A 오류'), '복원 내역은 순서대로 보여야 한다');
+  assert.match(html, /<script>[\s\S]*scrollTo[\s\S]*<\/script>/);
+});
+
+test('restoreEntries([])는 대기 중 문구로 돌아간다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendEntry('original', 'translated');
+  panel.restoreEntries([]);
+  assert.ok(!view.webview.html.includes('translated'));
+  assert.ok(view.webview.html.includes('대기 중'));
+});
+
+test('restoreEntries() 후 appendEntry를 해도 넘겨준 배열(캐시)은 바뀌지 않는다', () => {
+  const panel = new ThinkingPanel();
+  panel.resolveWebviewView(fakeView() as any);
+  const cached = [buildEntryHtml('a', 'b')];
+  panel.restoreEntries(cached);
+  panel.appendEntry('c', 'd');
+  assert.equal(cached.length, 1, '패널이 캐시 배열에 직접 쌓으면 캐시와 이중 기록된다');
+});
+
+test('buildEntryHtml/buildErrorHtml은 appendEntry/appendError와 같은 HTML을 만든다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendEntry('<orig>', ' 번역 ');
+  assert.ok(view.webview.html.includes(buildEntryHtml('<orig>', ' 번역 ')));
+  panel.appendError('오류만');
+  assert.ok(view.webview.html.includes(buildErrorHtml('오류만')));
+  panel.appendError('오류', '원문');
+  assert.ok(view.webview.html.includes(buildErrorHtml('오류', '원문')));
 });

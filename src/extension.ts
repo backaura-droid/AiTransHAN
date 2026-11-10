@@ -9,7 +9,8 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { ThinkingPanel } from './panel/thinkingPanel';
+import { ThinkingPanel, buildEntryHtml, buildErrorHtml } from './panel/thinkingPanel';
+import { SessionCache } from './sessionCache';
 import { findActiveSessionFile } from './sessionLocator';
 import { tailOnce } from './jsonlTailer';
 import { pickTranslatable } from './thinkingFilter';
@@ -73,7 +74,16 @@ export function activate(context: vscode.ExtensionContext): void {
   let currentOffset = 0;
   let watcher: fs.FSWatcher | undefined;
 
-  const queue = new TranslationQueue(translate, (original, result) => {
+  // 2026-11-10: 탭 A→B→A로 돌아왔을 때 A에서 보여줬던 내역을 되살리기 위한 세션별 캐시.
+  // 번역 결과는 그 항목이 나온 세션(filePath)에만 기록하고, 패널에는 지금 보는 세션일 때만 그린다.
+  const sessionCache = new SessionCache(10);
+
+  const queue = new TranslationQueue(translate, (filePath, original, result) => {
+    sessionCache.appendIfPresent(
+      filePath,
+      result.ok ? buildEntryHtml(original, result.text) : buildErrorHtml(result.error, original)
+    );
+    if (filePath !== currentFile) return;
     if (result.ok) {
       panel.appendEntry(original, result.text);
     } else {
@@ -89,7 +99,7 @@ export function activate(context: vscode.ExtensionContext): void {
       currentOffset = nextOffset;
       const translatable = pickTranslatable(records);
       for (const text of translatable) {
-        queue.enqueue(text);
+        queue.enqueue(file, text);
       }
       // "활성 탭인데 아무것도 안 뜬다"를 구분하려고 — 감시가 죽은 건지,
       // 정말 번역할 레코드가 없었던 건지 상태 줄로 보여준다.
@@ -135,12 +145,15 @@ export function activate(context: vscode.ExtensionContext): void {
     const found = findActiveSessionFile(projectsRoot, workspaceCwd, label);
 
     if (found !== currentFile) {
+      // 대상이 바뀌면 이전 대화 내용과 안 섞이게 교체한다 — 전에 보던 세션이면 그때 내역을 복원.
+      // 감시는 여전히 "지금부터"만(startWatching) — 자리 비운 동안 쌓인 분은 소급 번역하지 않는다.
       if (found === null) {
         stopWatching();
+        panel.clear();
       } else {
         startWatching(found);
+        panel.restoreEntries(sessionCache.getOrCreate(found));
       }
-      panel.clear(); // 대상이 바뀌면 이전 대화 내용과 안 섞이게 비운다
     }
     panel.setFollowing(label);
   }
@@ -148,6 +161,10 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('claudeThinkingKo.clear', () => {
       panel.clear();
+      // 캐시까지 지워야 한다 — 안 지우면 다른 탭에 갔다가 돌아올 때 지운 내역이 되살아난다.
+      if (currentFile) {
+        sessionCache.clear(currentFile);
+      }
     })
   );
 

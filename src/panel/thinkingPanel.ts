@@ -25,35 +25,35 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
   }
 
   /** "지금 보는 중" 표시만 갱신한다. 주의: 매 재탐색(초 단위)마다 불려도 되게 이 메서드 자체는
-   *  entries를 지우지 않는다 — 대상이 실제로 바뀌었을 때 비우는 건 호출하는 쪽(extension.ts)이
-   *  clear()를 따로 불러서 한다. 여기서 매번 지우면 탭이 안 바뀌어도 재탐색마다 비워진다. */
+   *  entries를 지우지 않는다 — 대상이 실제로 바뀌었을 때 교체하는 건 호출하는 쪽(extension.ts)이
+   *  restoreEntries()/clear()를 따로 불러서 한다. 여기서 매번 지우면 탭이 안 바뀌어도 재탐색마다 비워진다. */
   setFollowing(label: string | null): void {
     this.following = label;
     this.render();
   }
 
   appendEntry(original: string, translated: string): void {
-    this.entries.push(
-      `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko">${escapeHtml(translated.trim())}</div></div>`
-    );
+    this.entries.push(buildEntryHtml(original, translated));
     this.trim();
     this.render();
   }
 
   appendError(message: string, original?: string): void {
-    if (original) {
-      this.entries.push(
-        `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko error">${escapeHtml(message)}</div></div>`
-      );
-    } else {
-      this.entries.push(`<div class="entry error">${escapeHtml(message)}</div>`);
-    }
+    this.entries.push(buildErrorHtml(message, original));
     this.trim();
     this.render();
   }
 
   clear(): void {
     this.entries = [];
+    this.render();
+  }
+
+  /** 탭 복귀 시 그 세션에서 보여줬던 내역으로 통째로 교체한다. 복사해서 쓴다 — 캐시 배열을 그대로
+   *  잡으면 이후 appendEntry가 캐시에도 push돼 extension.ts의 캐시 기록과 이중으로 쌓인다. */
+  restoreEntries(entries: string[]): void {
+    this.entries = [...entries];
+    this.trim();
     this.render();
   }
 
@@ -111,6 +111,17 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
       this.view.webview.html = this.buildHtml();
     }
   }
+}
+
+// extension.ts가 세션 캐시에 넣을 HTML도 패널과 똑같은 모양이어야 해서 모듈 함수로 뺐다.
+export function buildEntryHtml(original: string, translated: string): string {
+  return `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko">${escapeHtml(translated.trim())}</div></div>`;
+}
+
+export function buildErrorHtml(message: string, original?: string): string {
+  return original
+    ? `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko error">${escapeHtml(message)}</div></div>`
+    : `<div class="entry error">${escapeHtml(message)}</div>`;
 }
 
 export function escapeHtml(s: string): string {

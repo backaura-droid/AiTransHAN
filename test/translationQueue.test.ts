@@ -1,4 +1,4 @@
-// TranslationQueue가 동시 실행 없이 순서대로 처리하고, 실패해도 멈추지 않는지 검증하는 테스트
+// TranslationQueue가 동시 실행 없이 순서대로 처리하고, 실패해도 멈추지 않으며, filePath를 결과까지 그대로 넘기는지 검증하는 테스트
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { TranslationQueue } from '../src/translationQueue';
@@ -22,28 +22,44 @@ test('동시에 두 건이 겹치지 않고 순서대로 처리된다', async ()
     },
     () => {}
   );
-  q.enqueue('a');
-  q.enqueue('b');
-  q.enqueue('c');
+  q.enqueue('f', 'a');
+  q.enqueue('f', 'b');
+  q.enqueue('f', 'c');
   await delay(100, null);
   assert.deepEqual(order, ['a', 'b', 'c']);
   assert.equal(maxConcurrent, 1);
 });
 
 test('번역 실패해도 큐가 멈추지 않고 다음 항목을 처리한다', async () => {
-  const results: Array<{ input: string; ok: boolean }> = [];
+  const results: Array<{ filePath: string; input: string; ok: boolean }> = [];
   const q = new TranslationQueue(
     async (text) => {
       if (text === 'fail') throw new Error('agy 실패');
       return `번역:${text}`;
     },
-    (input, result) => results.push({ input, ok: result.ok })
+    (filePath, input, result) => results.push({ filePath, input, ok: result.ok })
   );
-  q.enqueue('fail');
-  q.enqueue('ok-after');
+  q.enqueue('A.jsonl', 'fail');
+  q.enqueue('A.jsonl', 'ok-after');
   await delay(50, null);
   assert.deepEqual(results, [
-    { input: 'fail', ok: false },
-    { input: 'ok-after', ok: true }
+    { filePath: 'A.jsonl', input: 'fail', ok: false },
+    { filePath: 'A.jsonl', input: 'ok-after', ok: true }
   ]);
+});
+
+test('여러 세션 항목이 섞여도 각 결과에 자기 filePath가 그대로 붙어 FIFO로 나온다', async () => {
+  const results: string[] = [];
+  const q = new TranslationQueue(
+    async (text) => {
+      await delay(5, null);
+      return `번역:${text}`;
+    },
+    (filePath, input, result) => results.push(`${filePath}|${input}|${result.ok ? result.text : ''}`)
+  );
+  q.enqueue('A', 'a1');
+  q.enqueue('B', 'b1');
+  q.enqueue('A', 'a2');
+  await delay(60, null);
+  assert.deepEqual(results, ['A|a1|번역:a1', 'B|b1|번역:b1', 'A|a2|번역:a2']);
 });
