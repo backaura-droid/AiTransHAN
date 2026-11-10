@@ -81,3 +81,69 @@ test('드라이브 문자 대소문자가 달라도 같은 경로로 본다(윈�
   fs.writeFileSync(file, JSON.stringify({ cwd: 'E:\\Hermes_Obsidian' }) + '\n');
   assert.equal(findActiveSessionFile(root, 'e:\\Hermes_Obsidian'), file);
 });
+
+// 2026-11-10: 같은 워크스페이스를 VSCode 창 두 개(또는 탭 두 개)로 열어두면 cwd만으로는 구분이
+// 안 돼 서로 다른 창의 패널이 같은(최신 mtime) 파일을 가리키는 사고가 실사용에서 재현됐다.
+// ai-title 레코드로 "지금 보고 있는 탭 라벨"과 맞는 파일을 고르게 한다.
+function writeSession(file: string, cwd: string, aiTitles: string[]): void {
+  const lines = [JSON.stringify({ cwd, type: 'user' })];
+  for (const t of aiTitles) {
+    lines.push(JSON.stringify({ type: 'ai-title', aiTitle: t, sessionId: 'x' }));
+  }
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+}
+
+test('cwd가 같은 파일이 여럿이어도 활성 탭 라벨과 ai-title이 일치하는 파일을 고른다(mtime 무시)', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const newer = path.join(dir, 'newer.jsonl'); // 최신 mtime이지만 다른 탭
+  const older = path.join(dir, 'older.jsonl'); // 오래됐지만 지금 보는 탭
+  writeSession(newer, '/my/workspace', ['다른 탭 제목']);
+  writeSession(older, '/my/workspace', ['지금 보는 탭 제목']);
+  const now = Date.now();
+  fs.utimesSync(older, new Date(now - 10000), new Date(now - 10000));
+  fs.utimesSync(newer, new Date(now), new Date(now));
+  assert.equal(findActiveSessionFile(root, '/my/workspace', '지금 보는 탭 제목'), older);
+});
+
+test('ai-title이 여러 번 바뀐 파일은 가장 최근(마지막) 제목으로 매칭한다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'a.jsonl');
+  writeSession(file, '/my/workspace', ['첫 메시지 원문 그대로', '짧은 제목']);
+  assert.equal(findActiveSessionFile(root, '/my/workspace', '짧은 제목'), file);
+  // 더는 안 쓰는 옛 제목으로는 매칭이 안 돼야 한다 — 다른 후보가 있을 때 구분해 확인
+  const other = path.join(dir, 'other.jsonl');
+  writeSession(other, '/my/workspace', ['옛 제목과 안 겹치는 다른 탭']);
+  fs.utimesSync(file, new Date(Date.now() - 10000), new Date(Date.now() - 10000));
+  assert.equal(
+    findActiveSessionFile(root, '/my/workspace', '첫 메시지 원문 그대로'),
+    other,
+    '옛 제목은 더 이상 어느 파일과도 안 맞으므로 mtime 폴백(other)으로 가야 한다'
+  );
+});
+
+test('활성 탭 라벨과 일치하는 ai-title이 없으면(새 대화 등) 기존처럼 최신 mtime 파일로 되돌아간다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const newer = path.join(dir, 'newer.jsonl');
+  const older = path.join(dir, 'older.jsonl');
+  fs.writeFileSync(older, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  fs.writeFileSync(newer, JSON.stringify({ cwd: '/my/workspace' }) + '\n');
+  const now = Date.now();
+  fs.utimesSync(older, new Date(now - 10000), new Date(now - 10000));
+  fs.utimesSync(newer, new Date(now), new Date(now));
+  assert.equal(findActiveSessionFile(root, '/my/workspace', '어떤 파일에도 없는 제목'), newer);
+});
+
+test('activeTabLabel을 안 넘기면(undefined) 기존 동작과 같다', () => {
+  const root = makeFixture();
+  const dir = path.join(root, 'ws1');
+  fs.mkdirSync(dir);
+  const file = path.join(dir, 'a.jsonl');
+  writeSession(file, '/my/workspace', ['제목']);
+  assert.equal(findActiveSessionFile(root, '/my/workspace'), file);
+});

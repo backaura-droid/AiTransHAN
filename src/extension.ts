@@ -126,11 +126,13 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   // 지금 봐야 할 세션 파일을 다시 확인하고, 바뀌었으면 패널 대상을 교체한다.
-  // 세션 파일 선택은 순수하게 cwd 일치 + 최신 mtime 기준이라(findActiveSessionFile), 탭 이름이
-  // 바뀌거나 여러 탭이 섞여 있어도 엉뚱한 파일을 물 일이 없다. 탭 라벨은 표시용으로만 별도로 읽는다.
+  // 2026-11-10: 같은 워크스페이스를 창 여러 개(또는 탭 여러 개)로 열어두면 cwd+mtime만으로는
+  // 창마다 다른 탭을 구분하지 못해 서로 다른 창의 패널이 같은 파일을 가리키는 사고가 났다.
+  // 활성 탭 라벨을 findActiveSessionFile에 함께 넘겨, Claude Code가 세션에 남기는 ai-title과
+  // 대조해 "지금 이 창이 보고 있는 바로 그 탭"의 파일을 고르게 한다(없으면 최신 mtime으로 폴백).
   function retarget(): void {
-    const found = findActiveSessionFile(projectsRoot, workspaceCwd);
     const label = findActiveClaudeCodeTabLabel();
+    const found = findActiveSessionFile(projectsRoot, workspaceCwd, label);
 
     if (found !== currentFile) {
       if (found === null) {

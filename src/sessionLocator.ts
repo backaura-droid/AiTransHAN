@@ -129,14 +129,101 @@ function listJsonlCandidates(projectsRoot: string): SessionFileInfo[] {
   return candidates;
 }
 
-export function findActiveSessionFile(projectsRoot: string, workspaceCwd: string): string | null {
-  // 첫 매칭을 찾으면 즉시 반환하므로 과거 세션 수백 개를 매번 읽지 않는다.
+// 2026-11-10: 같은 워크스페이스 폴더를 VSCode 창 여러 개로 열어두면(또는 한 창에 Claude 탭을
+// 여러 개 열어두면) cwd+mtime만으로는 "지금 이 창에서 보고 있는 탭"을 구분할 수 없어, 서로 다른
+// 창의 번역 패널이 똑같은 파일을 가리키는 사고가 났다. Claude Code는 대화 제목을 지어서 세션
+// jsonl에 {"type":"ai-title","aiTitle":"..."} 레코드로 남기는데, 이 값이 VSCode 탭의 label과
+// 그대로 같다(실측 확인). activeTabLabel을 넘기면 cwd가 일치하는 후보들 중 "최신 ai-title이
+// 그 라벨과 같은 파일"을 우선 선택해, 창/탭마다 정확히 자기 세션을 찾게 한다.
+const TAIL_FIRST_CHUNK_BYTES = 256 * 1024;
+const TAIL_MAX_SCAN_BYTES = 4 * 1024 * 1024;
+const AI_TITLE_REGEX = /"type"\s*:\s*"ai-title"[^}]*"aiTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/;
+
+function extractLastAiTitleFromChunk(text: string): string | null {
+  let found: string | null = null;
+  for (const line of text.split('\n')) {
+    if (line.length === 0) continue;
+    try {
+      const record: unknown = JSON.parse(line);
+      if (
+        typeof record === 'object' &&
+        record !== null &&
+        (record as Record<string, unknown>).type === 'ai-title' &&
+        typeof (record as Record<string, unknown>).aiTitle === 'string'
+      ) {
+        found = (record as Record<string, unknown>).aiTitle as string;
+      }
+    } catch {
+      // 청크 맨 앞에서 잘린 줄일 수 있다 — 같은 줄 안에 ai-title이 온전히 있으면 정규식으로 구제
+      const match = AI_TITLE_REGEX.exec(line);
+      if (match) {
+        try {
+          found = JSON.parse(`"${match[1]}"`) as string;
+        } catch {
+          // 이스케이프 파싱 실패 시 무시
+        }
+      }
+    }
+  }
+  return found;
+}
+
+function findLatestAiTitle(filePath: string): string | null {
+  let fd: number;
+  try {
+    fd = fs.openSync(filePath, 'r');
+  } catch {
+    return null;
+  }
+  try {
+    const size = fs.fstatSync(fd).size;
+    const maxBytes = Math.min(size, TAIL_MAX_SCAN_BYTES);
+    let readBytes = Math.min(TAIL_FIRST_CHUNK_BYTES, maxBytes);
+
+    while (readBytes <= maxBytes) {
+      const start = size - readBytes;
+      const buf = Buffer.alloc(readBytes);
+      fs.readSync(fd, buf, 0, readBytes, start);
+      const title = extractLastAiTitleFromChunk(buf.toString('utf8'));
+      if (title !== null) return title;
+      if (readBytes >= maxBytes) break;
+      readBytes = Math.min(readBytes * 4, maxBytes);
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      fs.closeSync(fd);
+    } catch {
+      // 닫기 실패 무시
+    }
+  }
+}
+
+export function findActiveSessionFile(
+  projectsRoot: string,
+  workspaceCwd: string,
+  activeTabLabel?: string | null
+): string | null {
+  const matches: string[] = [];
   for (const candidate of listJsonlCandidates(projectsRoot)) {
     const cwd = findCwdInHead(candidate.file);
     if (cwd !== null && sameCwd(cwd, workspaceCwd)) {
-      return candidate.file;
+      matches.push(candidate.file);
     }
   }
-  return null;
+  if (matches.length === 0) return null;
+
+  if (activeTabLabel) {
+    for (const file of matches) {
+      if (findLatestAiTitle(file) === activeTabLabel) {
+        return file;
+      }
+    }
+  }
+
+  // ai-title 매칭 실패(새 대화라 아직 제목이 없는 경우 등) 시 기존 방식(최신 mtime)으로 되돌아간다.
+  return matches[0];
 }
 
