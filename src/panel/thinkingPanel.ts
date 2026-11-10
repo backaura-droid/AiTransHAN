@@ -1,27 +1,34 @@
-// 사고 블록을 영어 원문|한글 번역 2단으로 나란히 쌓아 보여주는 webview 패널.
-// 세션(대화)마다 독립된 창을 자동으로 여는 구조라, 인스턴스 하나당 독립 창(WebviewPanel) 하나에 묶인다
-// ("창마다 다른 번역창" 요청, 2026-11-10 — 여러 Claude Code 탭의 사고가 패널 하나에 섞이던 문제의 해결책).
+// 사고 블록을 영어 원문|한글 번역 2단으로 나란히 쌓아 보여주는 보조 사이드바 패널.
+// 2026-11-10 재설계: 세션/탭마다 독립된 창을 따로 띄우는 방식은 탭 식별이 불안정해(Claude Code가
+// 탭 제목·세션 파일을 대화 중 바꿈) 창이 중복되거나 엉뚱한 내용이 섞이는 사고가 반복됐다.
+// 창 하나만 두고 "지금 보고 있는 Claude Code 탭"이 바뀔 때마다 그 창이 대상을 바꾸는 쪽이 훨씬
+// 단순하고 안정적이다(extension.ts의 재대상 로직 참조). 이 클래스는 그 창 하나의 렌더링만 맡는다.
 import type * as vscode from 'vscode';
 
-// 2026-11-10: Claude 출력은 위→아래로 내려오는데 번역이 반대 순서면 헷갈린다는 요청으로,
-// 먼저 나온 게 위·새 항목이 아래에 쌓이도록 바꿨다(리뷰 I5가 "맨 위에 쌓기"를 택했던 것과 반대 방향).
-// 대신 webview.html 전체 재할당이 스크롤을 맨 위로 리셋시키는 문제를, 매번 맨 아래로 자동 스크롤하는
-// 스크립트로 해결한다(createWebviewPanel 쪽 enableScripts: true 필요).
+// 리뷰 I5 + 2026-11-10 요청: Claude 출력은 위→아래로 내려오므로 번역도 같은 방향(새 항목이 아래)으로
+// 쌓고, webview.html 전체 재할당이 스크롤을 맨 위로 리셋시키는 문제는 매번 맨 아래로 자동 스크롤하는
+// 스크립트로 해결한다(enableScripts: true 필요 — extension.ts에서 설정).
 // entriesHtml을 무한히 이어붙이지 않도록 최근 MAX_ENTRIES개까지만 남긴다.
 const MAX_ENTRIES = 200;
 
-export class ThinkingPanel {
-  private standalonePanel: vscode.WebviewPanel | undefined;
+export class ThinkingPanel implements vscode.WebviewViewProvider {
+  private view: vscode.WebviewView | undefined;
   private entries: string[] = [];
   private status = '';
+  /** 지금 이 패널이 따라가고 있는 Claude Code 탭 이름 — null이면 대상 없음(대기 중) */
+  private following: string | null = null;
 
-  attachStandalonePanel(panel: vscode.WebviewPanel): void {
-    this.standalonePanel = panel;
-    panel.onDidDispose(() => {
-      if (this.standalonePanel === panel) {
-        this.standalonePanel = undefined;
-      }
-    });
+  resolveWebviewView(webviewView: vscode.WebviewView): void {
+    this.view = webviewView;
+    webviewView.webview.options = { enableScripts: true };
+    this.render();
+  }
+
+  /** "지금 보는 중" 표시만 갱신한다. 주의: 매 재탐색(초 단위)마다 불려도 되게 이 메서드 자체는
+   *  entries를 지우지 않는다 — 대상이 실제로 바뀌었을 때 비우는 건 호출하는 쪽(extension.ts)이
+   *  clear()를 따로 불러서 한다. 여기서 매번 지우면 탭이 안 바뀌어도 재탐색마다 비워진다. */
+  setFollowing(label: string | null): void {
+    this.following = label;
     this.render();
   }
 
@@ -69,6 +76,7 @@ export class ThinkingPanel {
         body { font-family: var(--vscode-font-family); font-size: 12px; margin: 0; padding: 0; color: var(--vscode-foreground); }
         .header { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; background: var(--vscode-sideBarSectionHeader-background); border-bottom: 1px solid var(--vscode-panel-border); font-weight: 600; font-size: 11px; }
         .header span { flex: 1 1 50%; }
+        .following { padding: 4px 8px; font-size: 10px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .entry { display: flex; border-bottom: 1px solid var(--vscode-panel-border); }
         .entry > div { flex: 1 1 50%; padding: 8px 10px; box-sizing: border-box; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
         .en { color: var(--vscode-descriptionForeground); border-right: 1px solid var(--vscode-panel-border); }
@@ -79,18 +87,19 @@ export class ThinkingPanel {
       </style>
     `;
     const header = `<div class="header"><span>원문 (Thinking)</span><span>한글 번역</span></div>`;
+    const followingLine = `<div class="following">지금 보는 중: ${this.following ? escapeHtml(this.following) : '(활성 Claude Code 탭 없음)'}</div>`;
     const statusLine = this.status ? `<div class="status">${escapeHtml(this.status)}</div>` : '';
     const body =
       this.entries.length > 0
         ? this.entries.join('')
         : '<div class="empty">대기 중 — Claude Code의 새로운 영문 사고(thinking) 블록이 감지되면 자동으로 번역됩니다.</div>';
     const autoScroll = `<script>window.scrollTo(0, document.body.scrollHeight);</script>`;
-    return `<body>${style}${header}${statusLine}${body}${autoScroll}</body>`;
+    return `<body>${style}${header}${followingLine}${statusLine}${body}${autoScroll}</body>`;
   }
 
   private render(): void {
-    if (this.standalonePanel) {
-      this.standalonePanel.webview.html = this.buildHtml();
+    if (this.view) {
+      this.view.webview.html = this.buildHtml();
     }
   }
 }

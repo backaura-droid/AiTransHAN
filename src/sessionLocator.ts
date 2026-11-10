@@ -86,7 +86,7 @@ function sameCwd(a: string, b: string): boolean {
   return ra === rb;
 }
 
-export interface SessionFileInfo {
+interface SessionFileInfo {
   file: string;
   mtimeMs: number;
 }
@@ -140,34 +140,3 @@ export function findActiveSessionFile(projectsRoot: string, workspaceCwd: string
   return null;
 }
 
-const DEFAULT_MAX_AGE_MS = 30 * 60 * 1000; // 30분 — 이보다 오래 안 쓴 세션은 새 번역창을 자동으로 열지 않는다
-
-export interface FindAllActiveOptions {
-  /** 테스트용 — 생략하면 Date.now() */
-  now?: number;
-  /** 이보다 오래된(마지막 수정 기준) 세션은 제외 — 기본 30분 */
-  maxAgeMs?: number;
-}
-
-// 다중 세션 지원: "창마다 다른 번역창" 요청에 따라 워크스페이스에 맞는 활성 세션을
-// 하나만 고르지 않고 최근(기본 30분 이내) 것을 전부, 최신순으로 반환한다.
-// 나이 필터를 cwd 확인보다 먼저 적용해 오래된 파일의 헤더는 아예 읽지 않는다.
-export function findAllActiveSessionFiles(
-  projectsRoot: string,
-  workspaceCwd: string,
-  options: FindAllActiveOptions = {}
-): SessionFileInfo[] {
-  const now = options.now ?? Date.now();
-  const maxAgeMs = options.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
-
-  const fresh = listJsonlCandidates(projectsRoot).filter((c) => now - c.mtimeMs <= maxAgeMs);
-
-  const matches: SessionFileInfo[] = [];
-  for (const candidate of fresh) {
-    const cwd = findCwdInHead(candidate.file);
-    if (cwd !== null && sameCwd(cwd, workspaceCwd)) {
-      matches.push(candidate);
-    }
-  }
-  return matches;
-}
