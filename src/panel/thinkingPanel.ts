@@ -17,6 +17,8 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
   private status = '';
   /** 지금 이 패널이 따라가고 있는 Claude Code 탭 이름 — null이면 대상 없음(대기 중) */
   private following: string | null = null;
+  /** agy 호출 왕복(12~14초) 동안 멈춘 것처럼 보이지 않도록 — 항상 번역 중/대기 중 둘 중 하나를 보여준다 */
+  private translating = false;
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
     this.view = webviewView;
@@ -64,6 +66,13 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
     this.render();
   }
 
+  /** 번역 큐가 돌고 있는 동안 true — 호출 왕복 시간만큼 화면이 안 바뀌어도 "멈춘 게 아니라
+   *  번역 중"임을 또렷이 보여준다. extension.ts의 TranslationQueue onBusyChange가 호출한다. */
+  setTranslating(busy: boolean): void {
+    this.translating = busy;
+    this.render();
+  }
+
   private trim(): void {
     if (this.entries.length > MAX_ENTRIES) {
       this.entries.splice(0, this.entries.length - MAX_ENTRIES);
@@ -83,6 +92,10 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
         .header span { flex: 1 1 50%; }
         .following { padding: 4px 8px; font-size: 10px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .status { padding: 2px 8px; color: var(--vscode-descriptionForeground); font-size: 10px; border-bottom: 1px solid var(--vscode-panel-border); }
+        .translating-indicator { padding: 3px 8px; font-size: 11px; border-bottom: 1px solid var(--vscode-panel-border); }
+        .translating-indicator.busy { color: var(--vscode-charts-yellow, var(--vscode-notificationsWarningIcon-foreground, #cca700)); animation: blink 1.1s ease-in-out infinite; }
+        .translating-indicator.idle { color: var(--vscode-descriptionForeground); }
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
         #entries { flex: 1 1 auto; overflow-y: auto; }
         .entry { display: flex; border-bottom: 1px solid var(--vscode-panel-border); }
         .entry > div { flex: 1 1 50%; padding: 8px 10px; box-sizing: border-box; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
@@ -95,6 +108,9 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
     const header = `<div class="header"><span>원문 (Thinking)</span><span>한글 번역</span></div>`;
     const followingLine = `<div class="following">지금 보는 중: ${this.following ? escapeHtml(this.following) : '(활성 Claude Code 탭 없음)'}</div>`;
     const statusLine = this.status ? `<div class="status">${escapeHtml(this.status)}</div>` : '';
+    const translatingLine = this.translating
+      ? `<div class="translating-indicator busy">⏳ 번역 중입니다...</div>`
+      : `<div class="translating-indicator idle">입력을 대기 중입니다</div>`;
     const body =
       this.entries.length > 0
         ? this.entries.join('')
@@ -103,7 +119,7 @@ export class ThinkingPanel implements vscode.WebviewViewProvider {
       const el = document.getElementById('entries');
       if (el) { el.scrollTo(0, el.scrollHeight); }
     </script>`;
-    return `<body>${style}<div class="fixed-top">${header}${followingLine}${statusLine}</div><div id="entries">${body}</div>${autoScroll}</body>`;
+    return `<body>${style}<div class="fixed-top">${header}${followingLine}${translatingLine}${statusLine}</div><div id="entries">${body}</div>${autoScroll}</body>`;
   }
 
   private render(): void {

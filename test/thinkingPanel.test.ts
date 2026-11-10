@@ -133,6 +133,26 @@ test('restoreEntries() 후 appendEntry를 해도 넘겨준 배열(캐시)은 바
   assert.equal(cached.length, 1, '패널이 캐시 배열에 직접 쌓으면 캐시와 이중 기록된다');
 });
 
+// 2026-11-10: agy 호출 왕복(12~14초)이 걸리는 동안 화면이 멈춘 것처럼 보인다는 피드백 —
+// 지금 번역 중인지, 그냥 새 입력을 기다리는 중인지 항상 한 줄로 또렷이 보여준다(깜빡임은 CSS 담당).
+test('setTranslating(true)는 "번역 중"을 보여주고, false는 "대기 중"을 보여준다(항상 둘 중 하나)', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.setTranslating(true);
+  assert.ok(view.webview.html.includes('번역 중입니다'));
+  panel.setTranslating(false);
+  assert.ok(!view.webview.html.includes('번역 중입니다'));
+  assert.ok(view.webview.html.includes('입력을 대기 중입니다'));
+});
+
+test('기본값은 "대기 중"이다(한 번도 setTranslating을 안 불러도 멈춘 것처럼 안 보여야 한다)', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  assert.ok(view.webview.html.includes('입력을 대기 중입니다'));
+});
+
 test('buildEntryHtml/buildErrorHtml은 appendEntry/appendError와 같은 HTML을 만든다', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();

@@ -4,6 +4,8 @@
 export type TranslateFn = (text: string) => Promise<string>;
 export type TranslationResult = { ok: true; text: string } | { ok: false; error: string };
 export type OnResultFn = (filePath: string, input: string, result: TranslationResult) => void;
+/** 큐가 비어있다가 처리를 시작하면 true, 끝까지 비워지면 false — 한 번씩만 알림(항목마다 X) */
+export type OnBusyChangeFn = (busy: boolean) => void;
 
 export class TranslationQueue {
   private queue: Array<{ filePath: string; text: string }> = [];
@@ -11,7 +13,8 @@ export class TranslationQueue {
 
   constructor(
     private readonly translate: TranslateFn,
-    private readonly onResult: OnResultFn
+    private readonly onResult: OnResultFn,
+    private readonly onBusyChange?: OnBusyChangeFn
   ) {}
 
   enqueue(filePath: string, text: string): void {
@@ -23,6 +26,7 @@ export class TranslationQueue {
 
   private async drain(): Promise<void> {
     this.processing = true;
+    this.onBusyChange?.(true);
     while (this.queue.length > 0) {
       const { filePath, text } = this.queue.shift()!;
       try {
@@ -33,5 +37,6 @@ export class TranslationQueue {
       }
     }
     this.processing = false;
+    this.onBusyChange?.(false);
   }
 }

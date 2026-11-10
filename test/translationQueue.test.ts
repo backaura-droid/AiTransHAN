@@ -48,6 +48,34 @@ test('번역 실패해도 큐가 멈추지 않고 다음 항목을 처리한다'
   ]);
 });
 
+// 2026-11-10: agy 호출 왕복(12~14초)이 걸리는 동안 패널이 멈춘 것처럼 보인다는 피드백 —
+// "번역 중" 표시를 깜빡이게 할 수 있도록, 큐가 바쁜 상태로 전환/해제되는 시점을 알려줘야 한다.
+test('onBusyChange: 처리 시작 시 true, 큐가 완전히 빌 때 false를 딱 한 번씩만 알린다', async () => {
+  const busyHistory: boolean[] = [];
+  const q = new TranslationQueue(
+    async (text) => {
+      await delay(15, null);
+      return text;
+    },
+    () => {},
+    (busy) => busyHistory.push(busy)
+  );
+  q.enqueue('f', 'a');
+  q.enqueue('f', 'b'); // 이미 처리 중이므로 true가 중복으로 더 오면 안 된다
+  await delay(60, null);
+  assert.deepEqual(busyHistory, [true, false]);
+});
+
+test('onBusyChange 없이 써도(생략) 에러 없이 동작한다', async () => {
+  const q = new TranslationQueue(
+    async (text) => text,
+    () => {}
+  );
+  q.enqueue('f', 'a');
+  await delay(20, null);
+  // 에러 없이 여기까지 오면 통과
+});
+
 test('여러 세션 항목이 섞여도 각 결과에 자기 filePath가 그대로 붙어 FIFO로 나온다', async () => {
   const results: string[] = [];
   const q = new TranslationQueue(

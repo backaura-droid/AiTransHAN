@@ -78,18 +78,23 @@ export function activate(context: vscode.ExtensionContext): void {
   // 번역 결과는 그 항목이 나온 세션(filePath)에만 기록하고, 패널에는 지금 보는 세션일 때만 그린다.
   const sessionCache = new SessionCache(10);
 
-  const queue = new TranslationQueue(translate, (filePath, original, result) => {
-    sessionCache.appendIfPresent(
-      filePath,
-      result.ok ? buildEntryHtml(original, result.text) : buildErrorHtml(result.error, original)
-    );
-    if (filePath !== currentFile) return;
-    if (result.ok) {
-      panel.appendEntry(original, result.text);
-    } else {
-      panel.appendError(result.error, original);
-    }
-  });
+  const queue = new TranslationQueue(
+    translate,
+    (filePath, original, result) => {
+      sessionCache.appendIfPresent(
+        filePath,
+        result.ok ? buildEntryHtml(original, result.text) : buildErrorHtml(result.error, original)
+      );
+      if (filePath !== currentFile) return;
+      if (result.ok) {
+        panel.appendEntry(original, result.text);
+      } else {
+        panel.appendError(result.error, original);
+      }
+    },
+    // agy 호출 왕복(12~14초)이 걸리는 동안 멈춘 것처럼 보인다는 피드백 — 번역 중/대기 중을 또렷이 보여준다.
+    (busy) => panel.setTranslating(busy)
+  );
 
   function handleChange(file: string): void {
     if (paused) return;
