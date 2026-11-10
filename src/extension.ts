@@ -171,7 +171,9 @@ export function activate(context: vscode.ExtensionContext): void {
       'claudeThinkingKo.window',
       title,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { enableScripts: false, retainContextWhenHidden: true }
+      // 2026-11-10: 새 항목이 아래로 쌓이는 순서로 바꾸면서, 맨 아래로 자동 스크롤하는 스크립트가
+      // 필요해졌다(ThinkingPanel.buildHtml 참조) — 그래서 이 창만 enableScripts를 켠다.
+      { enableScripts: true, retainContextWhenHidden: true }
     );
     panel.attachStandalonePanel(webviewPanel);
 

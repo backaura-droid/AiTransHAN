@@ -3,8 +3,10 @@
 // ("창마다 다른 번역창" 요청, 2026-11-10 — 여러 Claude Code 탭의 사고가 패널 하나에 섞이던 문제의 해결책).
 import type * as vscode from 'vscode';
 
-// 리뷰 I5: webview.html을 통째로 재할당하면 스크롤이 맨 위로 리셋된다.
-// 최신 항목을 맨 위에 두면 리셋돼도 방금 들어온 항목이 바로 보인다.
+// 2026-11-10: Claude 출력은 위→아래로 내려오는데 번역이 반대 순서면 헷갈린다는 요청으로,
+// 먼저 나온 게 위·새 항목이 아래에 쌓이도록 바꿨다(리뷰 I5가 "맨 위에 쌓기"를 택했던 것과 반대 방향).
+// 대신 webview.html 전체 재할당이 스크롤을 맨 위로 리셋시키는 문제를, 매번 맨 아래로 자동 스크롤하는
+// 스크립트로 해결한다(createWebviewPanel 쪽 enableScripts: true 필요).
 // entriesHtml을 무한히 이어붙이지 않도록 최근 MAX_ENTRIES개까지만 남긴다.
 const MAX_ENTRIES = 200;
 
@@ -23,7 +25,7 @@ export class ThinkingPanel {
   }
 
   appendEntry(original: string, translated: string): void {
-    this.entries.unshift(
+    this.entries.push(
       `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko">${escapeHtml(translated.trim())}</div></div>`
     );
     this.trim();
@@ -32,11 +34,11 @@ export class ThinkingPanel {
 
   appendError(message: string, original?: string): void {
     if (original) {
-      this.entries.unshift(
+      this.entries.push(
         `<div class="entry"><div class="en">${escapeHtml(original)}</div><div class="ko error">${escapeHtml(message)}</div></div>`
       );
     } else {
-      this.entries.unshift(`<div class="entry error">${escapeHtml(message)}</div>`);
+      this.entries.push(`<div class="entry error">${escapeHtml(message)}</div>`);
     }
     this.trim();
     this.render();
@@ -49,7 +51,7 @@ export class ThinkingPanel {
 
   private trim(): void {
     if (this.entries.length > MAX_ENTRIES) {
-      this.entries.length = MAX_ENTRIES;
+      this.entries.splice(0, this.entries.length - MAX_ENTRIES);
     }
   }
 
@@ -72,7 +74,8 @@ export class ThinkingPanel {
       this.entries.length > 0
         ? this.entries.join('')
         : '<div class="empty">대기 중 — Claude Code의 새로운 영문 사고(thinking) 블록이 감지되면 자동으로 번역됩니다.</div>';
-    return `<body>${style}${header}${body}</body>`;
+    const autoScroll = `<script>window.scrollTo(0, document.body.scrollHeight);</script>`;
+    return `<body>${style}${header}${body}${autoScroll}</body>`;
   }
 
   private render(): void {
