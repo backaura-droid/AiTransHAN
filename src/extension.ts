@@ -19,6 +19,11 @@ import { pickTranslatable } from './thinkingFilter';
 import { TranslationQueue } from './translationQueue';
 import { writeAndRunAgy } from './agyTranslator';
 import { SessionWatcherPool } from './sessionWatcherPool';
+import { pickProvider, probeAgyAvailable, type ProviderSetting } from './providerResolver';
+import { translateWithGeminiApi } from './geminiApiTranslator';
+
+const GEMINI_API_KEY_SECRET = 'claudeThinkingKo.geminiApiKey';
+const HAS_PROMPTED_KEY = 'claudeThinkingKo.hasPromptedApiKey';
 
 // 세션 파일 유무를 훑는 것뿐이라(번역 CLI 호출이 아님) 짧게 잡아도 "초마다 번역 호출 금지"
 // 제약과는 무관하다. 탭 전환 이벤트로도 즉시 반응하니 이건 보조적인 안전망이다.
@@ -57,9 +62,31 @@ function findActiveClaudeCodeTabLabel(): string | null {
   return null;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+// 배포 후 agy(개발자 본인의 구독 CLI)가 없는 사용자를 위한 대체 경로 — Gemini API 키 입력을 받아
+// VSCode SecretStorage(설정 파일 평문 노출 없음)에 저장한다. 패널 상단 열쇠 아이콘과 명령
+// 팔레트 양쪽에서 같은 명령을 쓴다.
+async function promptAndStoreApiKey(context: vscode.ExtensionContext): Promise<void> {
+  const input = await vscode.window.showInputBox({
+    password: true,
+    ignoreFocusOut: true,
+    title: 'Gemini API 키 설정',
+    prompt: 'Google AI Studio(https://aistudio.google.com/apikey)에서 무료로 발급받은 키를 붙여넣으세요',
+    placeHolder: 'AIzaSy...'
+  });
+  if (input) {
+    await context.secrets.store(GEMINI_API_KEY_SECRET, input);
+    vscode.window.showInformationMessage('Claude 사고 번역: Gemini API 키를 저장했습니다.');
+  }
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const panel = new ThinkingPanel();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider('claudeThinkingKo.panel', panel));
+
+  // 워크스페이스 유무와 무관하게 항상 등록 — 아래 early return보다 먼저 와야 한다.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('claudeThinkingKo.setGeminiApiKey', () => promptAndStoreApiKey(context))
+  );
 
   const workspaceCwdMaybe = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!workspaceCwdMaybe) {
@@ -70,7 +97,47 @@ export function activate(context: vscode.ExtensionContext): void {
   const projectsRoot = resolveProjectsRoot();
   fs.mkdirSync(context.globalStorageUri.fsPath, { recursive: true });
 
-  const translate = (text: string) => writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
+  // agy 설치 여부는 세션 중 바뀌지 않는다고 보고 한 번만 확인(프로세스 스폰 비용 — 매 호출마다 하지 않음).
+  // 설정(provider)과 저장된 키는 번역할 때마다 다시 읽어, 사용자가 활동 중에 설정을 바꾸거나
+  // 열쇠 아이콘으로 키를 새로 넣어도 재시작 없이 바로 다음 번역부터 반영된다.
+  let cachedAgyAvailable: boolean | undefined;
+  const translate = async (text: string): Promise<string> => {
+    const setting = vscode.workspace
+      .getConfiguration('claudeThinkingKo')
+      .get<ProviderSetting>('provider', 'auto');
+    if (setting !== 'geminiApiKey') {
+      if (cachedAgyAvailable === undefined) {
+        cachedAgyAvailable = setting === 'agy' ? true : await probeAgyAvailable();
+      }
+      if (pickProvider(setting, cachedAgyAvailable) === 'agy') {
+        return writeAndRunAgy(text, { tempDir: context.globalStorageUri.fsPath });
+      }
+    }
+    const apiKey = await context.secrets.get(GEMINI_API_KEY_SECRET);
+    if (!apiKey) {
+      throw new Error('Gemini API 키가 설정되지 않음 — 패널 상단 열쇠 아이콘에서 설정하세요');
+    }
+    return translateWithGeminiApi(text, { apiKey });
+  };
+
+  // 설치 후 agy도 없고 키도 없는 사용자에게 딱 한 번만 안내한다(매번 다시 물어보지 않음 — 나중에
+  // 생각나면 열쇠 아이콘/명령 팔레트로 언제든 직접 설정 가능).
+  void (async () => {
+    const setting = vscode.workspace.getConfiguration('claudeThinkingKo').get<ProviderSetting>('provider', 'auto');
+    if (setting === 'agy') return;
+    if (setting === 'auto' && (await probeAgyAvailable())) return;
+    if (await context.secrets.get(GEMINI_API_KEY_SECRET)) return;
+    if (context.globalState.get(HAS_PROMPTED_KEY)) return;
+    await context.globalState.update(HAS_PROMPTED_KEY, true);
+    const choice = await vscode.window.showInformationMessage(
+      'Claude 사고 번역: 번역에 쓸 Gemini API 키가 필요해요(무료, Google AI Studio에서 발급).',
+      'API 키 입력',
+      '나중에'
+    );
+    if (choice === 'API 키 입력') {
+      await promptAndStoreApiKey(context);
+    }
+  })();
 
   let paused = false;
   // 패널에 보여주는 세션(지금 보는 탭). 감시는 이 파일 하나가 아니라 pool의 모든 파일에 걸려 있다.

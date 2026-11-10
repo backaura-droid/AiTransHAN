@@ -3,9 +3,13 @@
   "publisher": "local",
   "displayName": "Claude 사고 한글 보기",
   "description": "Claude Code 세션의 사고(thinking) 블록을 한국어로 번역해 보여주는 패널",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/backaura-droid/AiTransHAN.git"
+  },
   "engines": { "vscode": "^1.85.0" },
   "main": "./out/src/extension.js",
   "activationEvents": ["onStartupFinished"],
@@ -38,6 +42,11 @@
         "command": "claudeThinkingKo.clear",
         "title": "Claude 사고 번역: 전체 지우기",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "claudeThinkingKo.setGeminiApiKey",
+        "title": "Claude 사고 번역: Gemini API 키 설정",
+        "icon": "$(key)"
       }
     ],
     "menus": {
@@ -51,8 +60,29 @@
           "command": "claudeThinkingKo.clear",
           "when": "view == claudeThinkingKo.panel",
           "group": "navigation@2"
+        },
+        {
+          "command": "claudeThinkingKo.setGeminiApiKey",
+          "when": "view == claudeThinkingKo.panel",
+          "group": "navigation@3"
         }
       ]
+    },
+    "configuration": {
+      "title": "Claude 사고 번역",
+      "properties": {
+        "claudeThinkingKo.provider": {
+          "type": "string",
+          "enum": ["auto", "agy", "geminiApiKey"],
+          "enumDescriptions": [
+            "agy(Gemini CLI, 구독)가 설치돼 있으면 그걸 쓰고, 없으면 Gemini API 키 입력을 안내합니다",
+            "agy(Gemini CLI, 구독)만 사용합니다",
+            "Gemini API 키만 사용합니다(Google AI Studio에서 무료 발급)"
+          ],
+          "default": "auto",
+          "description": "번역에 쓸 방식"
+        }
+      }
     }
   },
   "scripts": {
