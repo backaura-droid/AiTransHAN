@@ -76,21 +76,6 @@ function findActiveClaudeCodeTabLabel(): string | null {
   return null;
 }
 
-// "클로드 탭이 꺼지면 번역창도 지워달라" 요청용 — 포커스 여부와 무관하게 열려 있는 모든
-// Claude Code 탭의 제목을 모은다(닫혔는지 판정은 이 집합에 더 이상 없는지로 본다).
-function openClaudeCodeTabLabels(): Set<string> {
-  const labels = new Set<string>();
-  for (const group of vscode.window.tabGroups.all) {
-    for (const tab of group.tabs) {
-      const input = tab.input as { viewType?: string } | undefined;
-      if (input?.viewType === CLAUDE_CODE_TAB_VIEWTYPE) {
-        labels.add(tab.label);
-      }
-    }
-  }
-  return labels;
-}
-
 // 사이드바는 세션별 번역 내용을 담지 않는다(그걸 담으면 다시 한 패널에 다 섞인다) — 상태 + 닫은 세션 다시 열기만 담당한다.
 const REOPEN_COMMAND = 'claudeThinkingKo.reopenSession';
 
@@ -137,8 +122,6 @@ interface WatchedFile {
 
 interface PanelGroup {
   title: string;
-  /** true면 title이 실제 열린 Claude Code 탭에서 가져온 것 — 이때만 탭이 닫혔는지 확인해 자동으로 닫는다. */
-  titleFromTab: boolean;
   panel: ThinkingPanel;
   webviewPanel: vscode.WebviewPanel;
   paused: boolean;
@@ -155,7 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const groups = new Map<string, PanelGroup>();
   // 사용자가 직접 닫은 제목은 다시 자동으로 창을 열지 않는다 — 그 제목으로 들어오는 새 파일은
   // 조용히 이 기록에만 추가해뒀다가, 사용자가 "다시 열기"를 누르면 한꺼번에 복원한다.
-  const closedByUser = new Map<string, { titleFromTab: boolean; files: string[] }>();
+  const closedByUser = new Map<string, { files: string[] }>();
 
   function updateStatus(): void {
     status.update(groups.size, [...closedByUser.keys()]);
@@ -229,7 +212,7 @@ export function activate(context: vscode.ExtensionContext): void {
     group.files.set(file, watchedFile);
   }
 
-  function ensureGroup(title: string, titleFromTab: boolean): PanelGroup {
+  function ensureGroup(title: string): PanelGroup {
     const existing = groups.get(title);
     if (existing) return existing;
 
@@ -243,14 +226,14 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     panel.attachStandalonePanel(webviewPanel);
 
-    const group: PanelGroup = { title, titleFromTab, panel, webviewPanel, paused: false, files: new Map() };
+    const group: PanelGroup = { title, panel, webviewPanel, paused: false, files: new Map() };
 
     webviewPanel.onDidDispose(() => {
       for (const wf of group.files.values()) {
         wf.watcher?.close();
       }
       groups.delete(title);
-      closedByUser.set(title, { titleFromTab: group.titleFromTab, files: [...group.files.keys()] });
+      closedByUser.set(title, { files: [...group.files.keys()] });
       updateStatus();
     });
 
@@ -263,7 +246,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const closed = closedByUser.get(title);
       if (!closed || groups.has(title)) return;
       closedByUser.delete(title);
-      const group = ensureGroup(title, closed.titleFromTab);
+      const group = ensureGroup(title);
       for (const file of closed.files) {
         addFileToGroup(group, file, false); // 다시 열 때도 지금부터만(그사이 쌓인 분은 건너뜀)
       }
@@ -301,7 +284,6 @@ export function activate(context: vscode.ExtensionContext): void {
         if (isFileHandled(info.file)) continue;
 
         const activeLabel = findActiveClaudeCodeTabLabel();
-        const titleFromTab = activeLabel !== null;
         const title = activeLabel ? `사고 번역 — ${activeLabel}` : fallbackSessionTitle(info.file);
 
         // 사용자가 이미 닫은 제목이면 창은 안 띄우고 기록에만 파일을 추가해둔다(다시 열기 때 복원됨).
@@ -311,7 +293,7 @@ export function activate(context: vscode.ExtensionContext): void {
           continue;
         }
 
-        const group = ensureGroup(title, titleFromTab);
+        const group = ensureGroup(title);
         addFileToGroup(group, info.file, false);
       }
     } catch {
@@ -319,23 +301,13 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   }
 
-  // "클로드 탭이 꺼지면 번역창도 지워달라" 요청 — 제목에서 뽑은 탭 라벨이 더 이상 열린 Claude Code
-  // 탭 목록에 없으면 그 번역창을 닫는다(onDidDispose가 알아서 뒷정리를 한다).
-  function closeSessionsForClosedClaudeTabs(): void {
-    const openLabels = openClaudeCodeTabLabels();
-    for (const group of groups.values()) {
-      if (!group.titleFromTab) continue;
-      const match = /^사고 번역 — (.+)$/.exec(group.title);
-      const label = match?.[1];
-      if (label && !openLabels.has(label)) {
-        group.webviewPanel.dispose();
-      }
-    }
-  }
-
+  // 2026-11-10 Ruling: "클로드 탭이 꺼지면 번역창도 지워달라"는 요청으로 탭 라벨 기준 자동 닫기를
+  // 넣었다가 뺐다 — Claude Code는 대화 중 탭 라벨을 바꾼다(첫 메시지 원문 → 나중에 짧은 AI 제목).
+  // 라벨을 안정적인 식별자로 쓸 수 없어서, 다시 연 창이 "방금 그 라벨이 안 보인다"며 곧바로
+  // 스스로 닫혀버리는(켜지다 꺼짐) 사고가 났다. 안정적인 식별자가 생기기 전까지는 수동으로만
+  // 닫고(사이드바 "다시 열기"로 복원) 자동으로는 닫지 않는다.
   function tick(): void {
     reconcileSessions();
-    closeSessionsForClosedClaudeTabs();
   }
 
   tick();
