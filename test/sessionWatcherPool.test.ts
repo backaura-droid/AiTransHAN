@@ -47,6 +47,31 @@ test('상한 초과 시 비활성 파일 중 가장 오래전에 markActive된 �
   assert.equal(pool.isWatching('A'), true);
 });
 
+// 2026-11-11 (Opus 검증): SessionCache가 이 풀과 독립된 기준으로 퇴출하면, 풀은 여전히 감시 중인데
+// 캐시만 먼저 밀려나 번역 결과가 조용히 버려질 수 있다. 풀이 퇴출할 때 호출하는 쪽(extension.ts)이
+// 같은 파일의 캐시도 같이 정리할 수 있도록 onEvicted를 호출해야 한다.
+test('상한 초과로 감시자를 끊을 때 onEvicted에 그 파일 경로를 넘긴다', () => {
+  const w = fakeWatch();
+  const evicted: string[] = [];
+  const pool = new SessionWatcherPool({
+    maxSessions: 2,
+    onChange: () => {},
+    watchImpl: w.watchImpl,
+    onEvicted: (f) => evicted.push(f)
+  });
+  pool.ensureWatching('A'); pool.markActive('A');
+  pool.ensureWatching('B'); pool.markActive('B');
+  pool.ensureWatching('C'); pool.markActive('C'); // A 퇴출
+  assert.deepEqual(evicted, ['A']);
+});
+
+test('onEvicted를 안 넘겨도(생략) 에러 없이 동작한다', () => {
+  const w = fakeWatch();
+  const pool = new SessionWatcherPool({ maxSessions: 1, onChange: () => {}, watchImpl: w.watchImpl });
+  pool.ensureWatching('A'); pool.markActive('A');
+  assert.doesNotThrow(() => pool.ensureWatching('B'));
+});
+
 test('활성 파일은 상한을 넘겨도 끊지 않는다(가장 오래됐어도)', () => {
   const w = fakeWatch();
   const pool = new SessionWatcherPool({ maxSessions: 2, onChange: () => {}, watchImpl: w.watchImpl });

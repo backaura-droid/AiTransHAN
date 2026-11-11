@@ -1,127 +1,102 @@
-// ThinkingPanel이 Claude 출력과 같은 방향으로 쌓고, 상태 줄과 "지금 보는 탭" 표시를 유지하며,
-// 대상 탭이 바뀌면 이전 항목을 비우는지(다른 대화 내용과 안 섞이게) 검증
+// ThinkingPanel이 webview.html을 통째로 재할당하지 않고(스크롤 리셋 방지) postMessage로
+// 증분 업데이트하는지, 그리고 (재)resolveWebviewView 시점엔 그동안 쌓인 전체 상태를 스켈레톤에
+// 담아 보여주는지 검증한다.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ThinkingPanel, buildEntryHtml, buildErrorHtml } from '../src/panel/thinkingPanel';
 
 function fakeView() {
-  return { webview: { options: undefined as unknown, html: '' } };
+  const posted: unknown[] = [];
+  let visibilityHandler: (() => void) | undefined;
+  let disposeHandler: (() => void) | undefined;
+  return {
+    visible: true,
+    webview: {
+      options: undefined as unknown,
+      html: '',
+      postMessage: (msg: unknown) => {
+        posted.push(msg);
+        return Promise.resolve(true);
+      }
+    },
+    onDidChangeVisibility: (cb: () => void) => {
+      visibilityHandler = cb;
+    },
+    onDidDispose: (cb: () => void) => {
+      disposeHandler = cb;
+    },
+    fireVisibilityChange(): void {
+      visibilityHandler?.();
+    },
+    fireDispose(): void {
+      disposeHandler?.();
+    },
+    posted
+  };
 }
 
-// 2026-11-10: "클로드 출력은 위→아래인데 번역이 반대라 헷갈린다"는 요청으로 순서를 바꿨다.
-// webview.html 전체 재할당은 그 자체로 스크롤을 맨 위로 리셋하므로, 맨 아래로 쌓는 대신
-// 매번 자동으로 맨 아래까지 스크롤하는 스크립트를 함께 내보낸다(enableScripts 필요).
-test('새 항목이 먼저 나온 것 아래에 쌓인다(클로드 출력과 같은 방향)', () => {
+test('resolveWebviewView 직후 html에는 자동 스크롤·메시지 처리 스크립트가 포함된다', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
-  panel.appendEntry('first original', 'first translated');
-  panel.appendEntry('second original', 'second translated');
-  const firstIndex = view.webview.html.indexOf('first translated');
-  const secondIndex = view.webview.html.indexOf('second translated');
-  assert.ok(firstIndex < secondIndex, '먼저 나온 항목이 더 앞(위)에 있어야 한다');
-});
-
-test('렌더된 HTML에 맨 아래로 자동 스크롤하는 스크립트가 포함된다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.appendEntry('original', 'translated');
   assert.match(view.webview.html, /<script>[\s\S]*scrollTo[\s\S]*<\/script>/);
+  assert.match(view.webview.html, /addEventListener\(['"]message['"]/);
 });
 
-test('항목이 너무 많이 쌓이면 오래된 것부터 버린다(앞쪽부터 삭제)', () => {
+test('appendEntry는 webview.html을 다시 쓰지 않고 postMessage로만 새 항목을 보낸다(스크롤 보존)', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
-  for (let i = 0; i < 250; i++) {
-    panel.appendEntry(`orig-${i}`, `ko-${i}`);
-  }
-  assert.ok(!view.webview.html.includes('ko-0'), '오래된 항목은 잘려나가야 한다');
-  assert.ok(view.webview.html.includes('ko-249'), '최신 항목은 남아있어야 한다');
+  const htmlAfterResolve = view.webview.html;
+  panel.appendEntry('original', 'translated');
+  assert.equal(view.webview.html, htmlAfterResolve, 'appendEntry가 webview.html을 건드리면 스크롤이 리셋된다');
+  const last = view.posted[view.posted.length - 1] as { type: string; html: string };
+  assert.equal(last.type, 'appendEntry');
+  assert.equal(last.html, buildEntryHtml('original', 'translated'));
 });
 
-test('번역 에러 기록 시 원문이 함께 주어지면 원문도 보존해 표시한다', () => {
+test('setFollowing/setStatus/setTranslating도 postMessage만 보내고 webview.html은 그대로다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  const htmlAfterResolve = view.webview.html;
+  panel.setFollowing('새 대화 제목');
+  panel.setStatus('마지막 확인 09:12:00');
+  panel.setTranslating(true);
+  assert.equal(view.webview.html, htmlAfterResolve);
+  const types = view.posted.map((m: any) => m.type);
+  assert.deepEqual(types, ['updateFollowing', 'updateStatus', 'updateTranslating']);
+});
+
+test('appendError: 원문이 있으면 같이, 없으면 메시지만 담아 보낸다', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
   panel.appendError('타임아웃 오류', 'original thinking text');
-  assert.ok(view.webview.html.includes('original thinking text'));
-  assert.ok(view.webview.html.includes('타임아웃 오류'));
+  let last = view.posted[view.posted.length - 1] as { type: string; html: string };
+  assert.equal(last.html, buildErrorHtml('타임아웃 오류', 'original thinking text'));
+
+  panel.appendError('원문 없는 오류');
+  last = view.posted[view.posted.length - 1] as { type: string; html: string };
+  assert.equal(last.html, buildErrorHtml('원문 없는 오류'));
 });
 
-test('clear()를 호출하면 쌓인 항목이 전부 지워지고 대기 중 문구로 돌아간다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.appendEntry('original', 'translated');
-  panel.appendError('오류', '원문');
-  panel.clear();
-  assert.ok(!view.webview.html.includes('translated'));
-  assert.ok(!view.webview.html.includes('오류'));
-  assert.ok(view.webview.html.includes('대기 중'));
-});
-
-test('setStatus()로 남긴 상태 줄이 항목 유무와 무관하게 계속 보인다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.setStatus('마지막 확인 09:12:00 (레코드 3개, 번역 대상 0개)');
-  assert.ok(view.webview.html.includes('마지막 확인 09:12:00'));
-  panel.appendEntry('original', 'translated');
-  assert.ok(view.webview.html.includes('마지막 확인 09:12:00'), '항목이 생겨도 상태 줄은 남아있어야 한다');
-});
-
-test('setFollowing()은 "지금 보는 중" 표시를 갱신한다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.setFollowing('새 대화 제목');
-  assert.ok(view.webview.html.includes('새 대화 제목'));
-});
-
-// 2026-11-10: setFollowing()은 재탐색마다(초 단위) 불릴 수 있다 — 대상이 안 바뀌었는데도
-// 부를 때마다 비우면 몇 초마다 번역 내역이 사라지는 버그가 생긴다. 대상이 바뀌었을 때 비우는 건
-// extension.ts가 따로 clear()를 불러서 한다(이 메서드 자체는 표시만 갱신, 비우지 않는다).
-test('setFollowing()을 반복 호출해도 쌓인 항목은 지워지지 않는다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.appendEntry('original', 'translated');
-  panel.setFollowing('같은 탭');
-  panel.setFollowing('같은 탭');
-  assert.ok(view.webview.html.includes('translated'), 'setFollowing 반복 호출로 항목이 지워지면 안 된다');
-});
-
-test('setFollowing(null)이면 대상 없음 문구를 보여준다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.setFollowing(null);
-  assert.ok(view.webview.html.includes('활성 Claude Code 탭 없음'));
-});
-
-// 2026-11-10: 탭 A→B→A로 돌아오면 A에서 보여줬던 내역을 되살린다(extension.ts가 세션별 캐시를 넘김).
-test('restoreEntries()는 기존 항목을 주어진 내역으로 교체하고 자동 스크롤과 함께 다시 그린다', () => {
+test('restoreEntries/clear는 replaceEntries 메시지를 보낸다(전체 교체)', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
   panel.appendEntry('B original', 'B translated');
-  panel.restoreEntries([buildEntryHtml('A original', 'A translated'), buildErrorHtml('A 오류', 'A 원문')]);
-  const html = view.webview.html;
-  assert.ok(!html.includes('B translated'), '이전 탭 항목은 사라져야 한다');
-  assert.ok(html.indexOf('A translated') < html.indexOf('A 오류'), '복원 내역은 순서대로 보여야 한다');
-  assert.match(html, /<script>[\s\S]*scrollTo[\s\S]*<\/script>/);
-});
 
-test('restoreEntries([])는 대기 중 문구로 돌아간다', () => {
-  const panel = new ThinkingPanel();
-  const view = fakeView();
-  panel.resolveWebviewView(view as any);
-  panel.appendEntry('original', 'translated');
-  panel.restoreEntries([]);
-  assert.ok(!view.webview.html.includes('translated'));
-  assert.ok(view.webview.html.includes('대기 중'));
+  panel.restoreEntries([buildEntryHtml('A original', 'A translated'), buildErrorHtml('A 오류', 'A 원문')]);
+  let last = view.posted[view.posted.length - 1] as { type: string; html: string };
+  assert.equal(last.type, 'replaceEntries');
+  assert.ok(last.html.indexOf('A translated') < last.html.indexOf('A 오류'));
+  assert.ok(!last.html.includes('B translated'));
+
+  panel.clear();
+  last = view.posted[view.posted.length - 1] as { type: string; html: string };
+  assert.equal(last.type, 'replaceEntries');
+  assert.equal(last.html, '');
 });
 
 test('restoreEntries() 후 appendEntry를 해도 넘겨준 배열(캐시)은 바뀌지 않는다', () => {
@@ -133,17 +108,65 @@ test('restoreEntries() 후 appendEntry를 해도 넘겨준 배열(캐시)은 바
   assert.equal(cached.length, 1, '패널이 캐시 배열에 직접 쌓으면 캐시와 이중 기록된다');
 });
 
-// 2026-11-10: agy 호출 왕복(12~14초)이 걸리는 동안 화면이 멈춘 것처럼 보인다는 피드백 —
-// 지금 번역 중인지, 그냥 새 입력을 기다리는 중인지 항상 한 줄로 또렷이 보여준다(깜빡임은 CSS 담당).
-test('setTranslating(true)는 "번역 중"을 보여주고, false는 "대기 중"을 보여준다(항상 둘 중 하나)', () => {
+test('항목이 너무 많이 쌓이면 appendEntry 메시지에 상한(max)을 같이 실어 보내 웹뷰가 오래된 것부터 지우게 한다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  for (let i = 0; i < 5; i++) panel.appendEntry(`orig-${i}`, `ko-${i}`);
+  const last = view.posted[view.posted.length - 1] as { type: string; max: number };
+  assert.equal(typeof last.max, 'number');
+  assert.ok(last.max > 0);
+});
+
+// 2026-11-11: 웹뷰가 아직 한 번도 안 열렸거나(resolveWebviewView 전), 사이드바를 접었다 폈을 때처럼
+// 다시 만들어질 수 있다 — 그 시점엔 그동안 쌓인 전체 상태(entries·status·following·translating)가
+// 스켈레톤 html 자체에 담겨 있어야 postMessage 없이도 바로 맞는 내용이 보인다.
+test('resolveWebviewView 전에 쌓인 상태도, 나중에 resolveWebviewView가 불리면 그 html에 전부 담긴다', () => {
+  const panel = new ThinkingPanel();
+  panel.appendEntry('먼저 쌓인 원문', '먼저 쌓인 번역');
+  panel.setFollowing('어떤 탭');
+  panel.setStatus('상태 메시지');
+  panel.setTranslating(true);
+
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+
+  assert.ok(view.webview.html.includes('먼저 쌓인 번역'));
+  assert.ok(view.webview.html.includes('어떤 탭'));
+  assert.ok(view.webview.html.includes('상태 메시지'));
+  assert.ok(view.webview.html.includes('번역 중입니다'));
+});
+
+test('웹뷰가 재생성되면(resolveWebviewView 재호출) 그 시점의 최신 상태가 다시 담긴다', () => {
+  const panel = new ThinkingPanel();
+  const view1 = fakeView();
+  panel.resolveWebviewView(view1 as any);
+  panel.appendEntry('original', 'translated');
+
+  const view2 = fakeView(); // 사이드바를 접었다 펴서 웹뷰가 새로 만들어진 상황을 흉내
+  panel.resolveWebviewView(view2 as any);
+  assert.ok(view2.webview.html.includes('translated'), '이전 webview가 사라져도 패널의 상태는 유지돼야 한다');
+});
+
+test('setFollowing(null)이면 대상 없음 문구를 postMessage로 보낸다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.setFollowing(null);
+  const last = view.posted[view.posted.length - 1] as { type: string; text: string };
+  assert.ok(last.text.includes('활성 Claude Code 탭 없음'));
+});
+
+test('setTranslating(true)/false 메시지에 busy 불리언이 실린다', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
   panel.setTranslating(true);
-  assert.ok(view.webview.html.includes('번역 중입니다'));
+  let last = view.posted[view.posted.length - 1] as { type: string; busy: boolean };
+  assert.equal(last.busy, true);
   panel.setTranslating(false);
-  assert.ok(!view.webview.html.includes('번역 중입니다'));
-  assert.ok(view.webview.html.includes('입력을 대기 중입니다'));
+  last = view.posted[view.posted.length - 1] as { type: string; busy: boolean };
+  assert.equal(last.busy, false);
 });
 
 test('기본값은 "대기 중"이다(한 번도 setTranslating을 안 불러도 멈춘 것처럼 안 보여야 한다)', () => {
@@ -153,14 +176,70 @@ test('기본값은 "대기 중"이다(한 번도 setTranslating을 안 불러도
   assert.ok(view.webview.html.includes('입력을 대기 중입니다'));
 });
 
-test('buildEntryHtml/buildErrorHtml은 appendEntry/appendError와 같은 HTML을 만든다', () => {
+test('buildEntryHtml/buildErrorHtml은 appendEntry/appendError가 보내는 것과 같은 HTML을 만든다', () => {
   const panel = new ThinkingPanel();
   const view = fakeView();
   panel.resolveWebviewView(view as any);
   panel.appendEntry('<orig>', ' 번역 ');
-  assert.ok(view.webview.html.includes(buildEntryHtml('<orig>', ' 번역 ')));
+  let last = view.posted[view.posted.length - 1] as { html: string };
+  assert.equal(last.html, buildEntryHtml('<orig>', ' 번역 '));
+
   panel.appendError('오류만');
-  assert.ok(view.webview.html.includes(buildErrorHtml('오류만')));
-  panel.appendError('오류', '원문');
-  assert.ok(view.webview.html.includes(buildErrorHtml('오류', '원문')));
+  last = view.posted[view.posted.length - 1] as { html: string };
+  assert.equal(last.html, buildErrorHtml('오류만'));
+});
+
+// 2026-11-11 (Opus 검증으로 발견): 사이드바를 접었다 펴도 resolveWebviewView는 다시 안 불리고
+// onDidChangeVisibility만 발생한다. retainContextWhenHidden 없이는 숨겨진 동안 iframe이 파괴되고
+// 그 사이 보낸 postMessage는 유실된다 — 다시 보일 때 스켈레톤으로 복구해야 한다.
+test('사이드바를 접었다 펴면(visibility 변경) 그 시점의 최신 상태로 html을 다시 쓴다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.appendEntry('original', 'translated'); // postMessage로만 감 — webview.html엔 아직 없음
+  assert.ok(!view.webview.html.includes('translated'));
+
+  view.visible = false;
+  view.fireVisibilityChange(); // 숨겨짐 — 아무 것도 안 해도 된다
+  view.visible = true;
+  view.fireVisibilityChange(); // 다시 보임 — 이 시점에 최신 상태로 복구돼야 한다
+
+  assert.ok(view.webview.html.includes('translated'));
+});
+
+test('웹뷰가 dispose된 뒤에는 postMessage를 더 시도하지 않는다(큐가 영원히 멈추지 않게)', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  view.fireDispose();
+  assert.doesNotThrow(() => {
+    panel.appendEntry('original', 'translated');
+    panel.setStatus('상태');
+    panel.setFollowing('탭');
+  });
+});
+
+// 2026-11-11 (Opus 검증으로 발견): 서버가 escapeHtml을 거친 문자열을 보내고 클라이언트가 그걸
+// 다시 textContent로 넣으면 "&amp;"처럼 이중 이스케이프된 글자가 화면에 그대로 보인다.
+test('setFollowing/setStatus는 이스케이프하지 않은 원문을 그대로 보낸다(클라이언트가 textContent로 표시)', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  panel.setFollowing("탭 <제목> & '테스트'");
+  let last = view.posted[view.posted.length - 1] as { text: string };
+  assert.equal(last.text, "탭 <제목> & '테스트'");
+
+  panel.setStatus("상태 <텍스트> & 'A'");
+  last = view.posted[view.posted.length - 1] as { text: string };
+  assert.equal(last.text, "상태 <텍스트> & 'A'");
+});
+
+test('클라이언트 스크립트에 "바닥 근처에 있을 때만 자동 스크롤" 로직이 들어있다', () => {
+  const panel = new ThinkingPanel();
+  const view = fakeView();
+  panel.resolveWebviewView(view as any);
+  // 정확한 구현 방식보다 "바닥 여부 판정" 자체가 들어있는지만 느슨하게 확인(과도한 구현 결합 방지)
+  assert.match(view.webview.html, /scrollHeight/);
+  assert.match(view.webview.html, /scrollTop/);
+  assert.match(view.webview.html, /clientHeight/);
 });

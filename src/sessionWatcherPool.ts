@@ -6,6 +6,9 @@ import * as fs from 'node:fs';
 export interface SessionWatcherPoolOptions {
   maxSessions?: number; // 기본 10 (SessionCache 상한과 맞춤)
   onChange: (filePath: string) => void;
+  /** 상한 초과로 감시자를 끊을 때(퇴출) 호출된다 — 호출하는 쪽이 같은 파일의 다른 캐시도 같이
+   *  정리할 수 있게(예: SessionCache) 한다. 퇴출 기준(최근 활성 순서)이 이 클래스의 정본이다. */
+  onEvicted?: (filePath: string) => void;
   watchImpl?: (filePath: string, listener: () => void) => { close(): void };
 }
 
@@ -59,6 +62,7 @@ export class SessionWatcherPool {
       if (oldest !== undefined) {
         this.entries.get(oldest)!.watcher.close();
         this.entries.delete(oldest);
+        this.options.onEvicted?.(oldest);
       }
     }
   }

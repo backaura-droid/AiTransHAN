@@ -251,7 +251,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   }
 
-  const pool = new SessionWatcherPool({ maxSessions: 10, onChange: handleChange });
+  const pool = new SessionWatcherPool({
+    maxSessions: 10,
+    onChange: handleChange,
+    // 2026-11-11 (Opus 검증): SessionCache(생성 순서로 퇴출)와 SessionWatcherPool(최근 활성 순서로
+    // 퇴출) 상한 기준이 서로 달라, 아직 감시 중인데 캐시만 먼저 밀려나 번역 결과가 조용히 버려지는
+    // 사고가 날 수 있었다. 퇴출 기준은 풀이 가진 쪽(최근 활성 순서)을 정본으로 삼아, 풀이 감시자를
+    // 끊을 때 그 세션의 캐시도 같이 비운다(offsets는 그대로 둔다 — 재활성화 시 이어 읽기 위해).
+    onEvicted: (filePath) => sessionCache.clear(filePath)
+  });
 
   // 지금 봐야 할 세션 파일을 다시 확인하고, 바뀌었으면 패널 대상을 교체한다.
   // 2026-11-10: 같은 워크스페이스를 창 여러 개(또는 탭 여러 개)로 열어두면 cwd+mtime만으로는
@@ -290,6 +298,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }
     panel.setFollowing(label);
+
+    // 2026-11-11 (Opus 검증): tail은 fs.watch 이벤트로만 일어나는데, 이벤트가 유실되면(드물게
+    // 일어나는 OS 수준 현상) 다음 실제 변경이 있을 때까지 그 세션은 멈춘 것처럼 보인다. 재탐색마다
+    // (3초 또는 탭 전환 시) 지금 보는 세션만이라도 한 번 더 확인한다 — tailOnce는 새로 쓰인 바이트가
+    // 없으면 파일을 열지도 않고 바로 끝나(jsonlTailer.ts) 비용이 거의 없다.
+    if (found !== null) {
+      handleChange(found);
+    }
   }
 
   context.subscriptions.push(

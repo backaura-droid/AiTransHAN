@@ -1,10 +1,11 @@
 {
   "name": "claude-thinking-ko",
-  "publisher": "local",
+  "publisher": "backaura",
   "displayName": "Claude 사고 한글 보기",
   "description": "Claude Code 세션의 사고(thinking) 블록을 한국어로 번역해 보여주는 패널",
-  "version": "0.3.0",
-  "private": true,
+  "version": "0.4.0",
+  "categories": ["Other"],
+  "keywords": ["claude", "claude code", "번역", "translation", "korean", "thinking"],
   "license": "MIT",
   "repository": {
     "type": "git",
